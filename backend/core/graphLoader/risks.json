@@ -1,0 +1,81 @@
+{
+  "risk_rules": [
+    {
+      "id": "R001",
+      "description": "CRITICAL: Public Access to Production Data",
+      "severity": 9,
+      "resource_pattern": "prod-bucket",
+      "risky_actions": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ]
+    },
+    {
+      "id": "R002",
+      "description": "CRITICAL: Delete Permissions on Production",
+      "severity": 10,
+      "resource_pattern": "prod-bucket",
+      "risky_actions": [
+        "s3:DeleteObject",
+        "s3:DeleteBucket"
+      ]
+    },
+    {
+      "id": "R003",
+      "description": "HIGH: Potential Ransomware Risk (Write Access to Backups)",
+      "severity": 7,
+      "resource_pattern": "audit-logs-bucket",
+      "risky_actions": [
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ]
+    },
+    {
+      "id": "R004",
+      "description": "HIGH: Privilege Escalation (PutBucketPolicy)",
+      "severity": 8,
+      "resource_pattern": "*",
+      "risky_actions": [
+        "s3:PutBucketPolicy",
+        "s3:PutBucketAcl"
+      ]
+    },
+    {
+      "id": "R005",
+      "description": "MEDIUM: Security Controls Bypass (Encryption/Versioning)",
+      "severity": 5,
+      "resource_pattern": "prod-bucket",
+      "risky_actions": [
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration"
+      ]
+    },
+    {
+      "id": "R006",
+      "description": "MEDIUM: Admin Privileges Detected",
+      "severity": 5,
+      "resource_pattern": "*",
+      "risky_actions": [
+        "*"
+      ]
+    },
+    {
+      "id": "R007",
+      "description": "LOW: Listing User Home Directories",
+      "severity": 1,
+      "resource_pattern": "users-home-bucket",
+      "risky_actions": [
+        "s3:ListBucket"
+      ]
+    },
+    {
+      "id": "R008",
+      "description": "CRITICAL: Full Administrative Power",
+      "severity": 10,
+      "resource_pattern": "*",
+      "risky_actions": [
+        "s3:*"
+      ]
+    }
+  ]
+}

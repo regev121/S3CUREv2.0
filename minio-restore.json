@@ -1,0 +1,249 @@
+{
+  "buckets": [
+    "users-home-bucket",
+    "prod-bucket",
+    "logs-bucket",
+    "drop-zone-bucket",
+    "audit-logs-bucket",
+    "raw-data-bucket",
+    "processed-data-bucket",
+    "finance-data-bucket"
+  ],
+  "policies": {
+    "policy_admin": {
+      "source": "policy_admin.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "AdminAccess",
+            "Effect": "Allow",
+            "Action": [
+              "*"
+            ],
+            "Resource": [
+              "*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_alice": {
+      "source": "policy_alice_fixed.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:PutObject",
+              "s3:GetObject",
+              "s3:DeleteObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::users-home-bucket/alice/*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_auditors": {
+      "source": "policy_auditors_fixed.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:ListBucket",
+              "s3:GetBucketLocation"
+            ],
+            "Resource": [
+              "arn:aws:s3:::audit-logs-bucket"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::audit-logs-bucket/*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_backend_services": {
+      "source": "policy_backend_fixed.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::raw-data-bucket/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:PutObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::processed-data-bucket/*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_bob": {
+      "source": "policy_bob.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:PutObject",
+              "s3:GetObject",
+              "s3:DeleteObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::users-home-bucket/bob/*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_cfo": {
+      "source": "policy_cfo_corrected.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:ListBucket"
+            ],
+            "Resource": [
+              "arn:aws:s3:::finance-data-bucket"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::finance-data-bucket/*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_contractor": {
+      "source": "policy_contractor.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "ContractorUploadOnly",
+            "Effect": "Allow",
+            "Action": [
+              "s3:ListBucket"
+            ],
+            "Resource": [
+              "arn:aws:s3:::drop-zone-bucket"
+            ],
+            "Condition": {
+              "IpAddress": {
+                "aws:SourceIp": "203.0.113.50"
+              }
+            }
+          },
+          {
+            "Sid": "ContractorUploadOnly",
+            "Effect": "Allow",
+            "Action": [
+              "s3:PutObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::drop-zone-bucket/*"
+            ],
+            "Condition": {
+              "IpAddress": {
+                "aws:SourceIp": "203.0.113.50"
+              }
+            }
+          },
+          {
+            "Sid": "DenyReadSensitive",
+            "Effect": "Deny",
+            "Action": [
+              "s3:GetObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::drop-zone-bucket/sensitive/*"
+            ]
+          }
+        ]
+      }
+    },
+    "policy_devops": {
+      "source": "policy_devops_fixed.json",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:ListBucket",
+              "s3:GetBucketLocation"
+            ],
+            "Resource": [
+              "arn:aws:s3:::prod-bucket"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::prod-bucket/*"
+            ]
+          },
+          {
+            "Effect": "Deny",
+            "Action": [
+              "s3:DeleteObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::logs-bucket/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:ListBucket"
+            ],
+            "Resource": [
+              "arn:aws:s3:::logs-bucket"
+            ],
+            "Condition": {
+              "IpAddress": {
+                "aws:SourceIp": "10.0.0.1"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
