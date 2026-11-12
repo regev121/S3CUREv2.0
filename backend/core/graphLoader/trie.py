@@ -1,86 +1,75 @@
+def patterns_overlap(left, right):
+    """Find whether two * / ? glob patterns can match the same string."""
+    pending = [(0, 0)]
+    seen = set()
+    while pending:
+        i, j = pending.pop()
+        if (i, j) in seen:
+            continue
+        seen.add((i, j))
+        if i == len(left) and j == len(right):
+            return True
+
+        a = left[i] if i < len(left) else None
+        b = right[j] if j < len(right) else None
+        if a == "*":
+            pending.append((i + 1, j))
+        if b == "*":
+            pending.append((i, j + 1))
+        if a is not None and b is not None and (a == b or a in "*?" or b in "*?"):
+            pending.append((i if a == "*" else i + 1, j if b == "*" else j + 1))
+
+    return False
+
+
+def _literal_prefix(pattern):
+    return pattern.split("*", 1)[0].split("?", 1)[0]
+
+
 class TrieNode:
     def __init__(self):
-        """
-        Represents a single node within the Permission Trie.
-        """
         self.children = {}
-        self.is_wildcard = False
-        self.allowed_actions = set()
+        self.grants = {}
 
 
 class PermissionTrie:
+    """Index resource grants by their literal prefix before the first wildcard."""
+
     def __init__(self):
-        """
-        Initializes a Permission Trie.
-        A specialized prefix tree designed for efficient matching of resource paths
-        against IAM permission patterns, supporting wildcard handling.
-        """
         self.root = TrieNode()
 
     def insert(self, resource_arn, actions):
-        """
-        Inserts a resource path into the Trie, associating it with the set of allowed actions.
-        Handles wildcard segments ('*') by marking nodes as wildcard-enabled,
-        propagating permissions to all potential child paths.
-        """
-        clean_path = self._normalize_path(resource_arn)
-        parts = clean_path.split("/")
-
+        pattern = resource_arn.removeprefix("arn:aws:s3:::")
+        if not pattern:
+            return
         node = self.root
-        for part in parts:
-            if part == "*" or part == "":
-                node.is_wildcard = True
-                # Wildcards imply the actions grant access to this level and all descendants.
-                node.allowed_actions.update(actions)
+        for char in _literal_prefix(pattern):
+            if char not in node.children:
+                node.children[char] = TrieNode()
+            node = node.children[char]
+        node.grants.setdefault(pattern, set()).update(actions)
+
+    def matching_grants(self, resource_pattern):
+        selector = resource_pattern.removeprefix("arn:aws:s3:::")
+        prefix = _literal_prefix(selector)
+        node = self.root
+        for char in prefix:
+            # A grant may start with a wildcard before the selector's literal prefix ends.
+            for pattern, actions in node.grants.items():
+                if patterns_overlap(pattern, selector):
+                    yield pattern, actions
+            node = node.children.get(char)
+            if node is None:
                 return
 
-            if part not in node.children:
-                node.children[part] = TrieNode()
-            node = node.children[part]
-
-        # Associate actions with the specific leaf or intermediate node
-        node.allowed_actions.update(actions)
+        pending = [node]
+        while pending:
+            node = pending.pop()
+            for pattern, actions in node.grants.items():
+                if patterns_overlap(pattern, selector):
+                    yield pattern, actions
+            if prefix != selector:
+                pending.extend(node.children.values())
 
     def get_allowed_actions(self, target_resource):
-        """
-        Retrieves the cumulative set of actions permitted for a specific target resource.
-        Traverses the Trie to collect permissions from both exact matches and
-        any wildcard nodes encountered along the path.
-        """
-        clean_path = self._normalize_path(target_resource)
-        parts = clean_path.split("/")
-
-        found_actions = set()
-        self._collect_permissions(self.root, parts, 0, found_actions)
-        return found_actions
-
-    def _collect_permissions(self, node, parts, index, accumulator):
-        """
-        Recursive helper to traverse the Trie and accumulate permissions.
-        """
-        # 1. Applicability of Wildcards: If current node is a wildcard, its permissions apply to the target.
-        if node.is_wildcard:
-            accumulator.update(node.allowed_actions)
-
-        # 2. Path Completion: If traversal reached the target depth, collect explicit permissions.
-        if index == len(parts):
-            accumulator.update(node.allowed_actions)
-            return
-
-        # 3. Recursive Descent: Continue traversing if path segments match.
-        part = parts[index]
-        if part in node.children:
-            self._collect_permissions(
-                node.children[part], parts, index + 1, accumulator
-            )
-
-    def _normalize_path(self, arn):
-        """
-        Standardizes the resource string for Trie insertion/lookup.
-        Strips ARN prefixes to focus on the hierarchical path.
-        """
-        if arn == "*":
-            return "*"
-        if "arn:aws:s3:::" in arn:
-            return arn.split("arn:aws:s3:::")[-1]
-        return arn
+        return {action for _, actions in self.matching_grants(target_resource) for action in actions}

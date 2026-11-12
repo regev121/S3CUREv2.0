@@ -156,6 +156,14 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             scan = client.post("/api/scan/user/Alice", headers=alice)
             assert scan.status_code == 200, scan.text
             data = scan.json()
+            assert data["violation_details"][0]["evidence"] == [{
+                "policy": "prod-read",
+                "resource": "prod-bucket",
+                "action": "s3:GetObject",
+                "direct": True,
+                "groups": ["Ops", "QA"],
+                "conditional": False,
+            }]
             assert data["score"] > 0
             assert {node["type"] for node in data["graph_data"]["nodes"]} == {"USER", "POLICY", "RESOURCE"}
             assert len(data["graph_data"]["edges"]) == 2
@@ -176,6 +184,9 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
                 "username": "Alice", "remove_policies": ["prod-read"], "remove_groups": ["Ops"],
             }).json()
             assert partial["comparison"]["delta"] == 0
+            simulated_grant = partial["violation_details"][0]["evidence"][0]
+            assert not simulated_grant["direct"]
+            assert simulated_grant["groups"] == ["QA"]
             full = client.post("/api/scan/simulate", headers=admin, json={
                 "username": "Alice", "remove_policies": ["prod-read"], "remove_groups": ["Ops", "QA"],
             }).json()

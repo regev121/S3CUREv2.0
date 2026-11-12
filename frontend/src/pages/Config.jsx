@@ -41,6 +41,7 @@ export default function Config() {
     severity: 10,
     resource_pattern: "",
     risky_actions: "",
+    require_global_grant: false,
   });
 
   const canEdit = user?.role === "ADMIN";
@@ -97,6 +98,7 @@ export default function Config() {
       severity: 10,
       resource_pattern: "",
       risky_actions: "",
+      require_global_grant: false,
     });
     setEditingIndex(null);
     setShowModal(true);
@@ -111,6 +113,7 @@ export default function Config() {
       risky_actions: Array.isArray(rule.risky_actions)
         ? rule.risky_actions.join(", ")
         : rule.risky_actions || "",
+      require_global_grant: Boolean(rule.require_global_grant),
     });
     setEditingIndex(index);
     setShowModal(true);
@@ -134,10 +137,12 @@ export default function Config() {
       .filter((s) => s.length > 0);
 
     const newRule = {
+      id: rules[editingIndex]?.id,
       description: formData.description,
       severity: parseInt(formData.severity),
       resource_pattern: formData.resource_pattern,
       risky_actions: actionsArray,
+      require_global_grant: formData.require_global_grant,
     };
 
     const newRules = [...rules];
@@ -402,6 +407,17 @@ export default function Config() {
                  Separate multiple actions with commas. Wildcards supported.
               </Form.Text>
             </Form.Group>
+            <Form.Check
+              id="require-global-grant"
+              label="Require a deployment-wide grant"
+              checked={formData.require_global_grant}
+              onChange={(e) =>
+                setFormData({ ...formData, require_global_grant: e.target.checked })
+              }
+            />
+            <Form.Text className="text-body-secondary">
+              Match grants on all resources. With * or s3:* in the action list, require the full action scope.
+            </Form.Text>
           </Modal.Body>
           <Modal.Footer className="border-secondary">
             <Button variant="outline-secondary" onClick={() => setShowModal(false)}>

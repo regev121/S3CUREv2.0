@@ -57,7 +57,8 @@
       "resource_pattern": "*",
       "risky_actions": [
         "*"
-      ]
+      ],
+      "require_global_grant": true
     },
     {
       "id": "R007",
@@ -75,7 +76,8 @@
       "resource_pattern": "*",
       "risky_actions": [
         "s3:*"
-      ]
+      ],
+      "require_global_grant": true
     }
   ]
 }

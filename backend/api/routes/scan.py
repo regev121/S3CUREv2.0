@@ -42,6 +42,7 @@ def scan_user(username, requester=Depends(get_current_user), role=Depends(get_re
         "score": score,
         "violations_count": len(violations),
         "violations": [v["rule"] for v in violations],
+        "violation_details": violations,
         "graph_data": graph,
     }
 
@@ -113,6 +114,7 @@ def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
             "status": "Risk Increased" if delta > 0 else "Risk Decreased" if delta < 0 else "Stable",
         },
         "simulated_violations": [v["rule"] for v in violations],
+        "violation_details": violations,
     }
 
 

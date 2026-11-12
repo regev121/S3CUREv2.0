@@ -3,6 +3,7 @@ import Graph from "react-graph-vis";
 import api from "../services/api";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
 import { Button } from "../components/Button";
+import FindingList from "../components/FindingList";
 import { Badge } from "../components/Badge";
 import { Spinner } from "react-bootstrap";
 import { User, ShieldAlert, Search, Network } from "lucide-react";
@@ -332,27 +333,10 @@ function ScanContent() {
                     Violations (
                     {result.violations_count ?? result.violations?.length ?? 0})
                   </p>
-                  <div className="d-flex flex-column gap-2">
-                    {(result.violations || []).map((text, i) => (
-                      <div
-                        key={i}
-                        className="d-flex align-items-start gap-2 p-2 rounded bg-dark border border-secondary"
-                      >
-                        <ShieldAlert
-                          className="text-danger flex-shrink-0 mt-1"
-                          style={{ width: "1rem", height: "1rem" }}
-                        />
-                        <span className="small text-light break-word">
-                          {text}
-                        </span>
-                      </div>
-                    ))}
-                    {(!result.violations || result.violations.length === 0) && (
-                      <p className="small text-body-secondary mb-0">
-                        No violations found.
-                      </p>
-                    )}
-                  </div>
+                  <FindingList
+                    findings={result.violation_details ?? result.violations}
+                    emptyText="No violations found."
+                  />
                 </div>
               </>
             )}

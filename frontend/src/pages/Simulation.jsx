@@ -7,11 +7,11 @@ import {
   TrendingDown,
   TrendingUp,
   AlertTriangle,
-  CheckCircle,
 } from "lucide-react";
 import api from "../services/api";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
 import { Button } from "../components/Button";
+import FindingList from "../components/FindingList";
 import { Badge } from "../components/Badge";
 
 const FIELDS = [
@@ -229,20 +229,10 @@ export default function Simulation() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {result.simulated_violations.length === 0 ? (
-                    <div className="text-center py-4 text-success">
-                      <CheckCircle size={32} className="mb-2" />
-                      <p className="mb-0">No violations found in this simulation.</p>
-                    </div>
-                  ) : (
-                    <ul className="list-group list-group-flush bg-transparent">
-                      {result.simulated_violations.map((v, i) => (
-                        <li key={i} className="list-group-item bg-transparent text-light border-secondary px-0">
-                          • {v}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                  <FindingList
+                    findings={result.violation_details ?? result.simulated_violations}
+                    emptyText="No violations found in this simulation."
+                  />
                 </CardContent>
               </Card>
             </div>

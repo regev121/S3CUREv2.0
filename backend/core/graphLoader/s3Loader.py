@@ -41,6 +41,14 @@ def _policy_names(info):
     )
 
 
+def policy_origins(direct, groups):
+    origins = {policy: {"direct": True, "groups": []} for policy in direct}
+    for group, policies in sorted(groups.items()):
+        for policy in policies:
+            origins.setdefault(policy, {"direct": False, "groups": []})["groups"].append(group)
+    return origins
+
+
 class S3Loader:
     """Use the scanner identity for reads and archival, and a separate alias for IAM changes."""
 
@@ -171,8 +179,8 @@ class S3Loader:
     def get_user_access_data(self, username):
         direct, groups = self.get_user_assignments(username)
         return [
-            {"name": name, "content": self.get_policy(name)}
-            for name in sorted(direct.union(*groups.values()))
+            {"name": name, "content": self.get_policy(name), "origin": origin}
+            for name, origin in sorted(policy_origins(direct, groups).items())
         ]
 
     def is_scanner_name(self, username):

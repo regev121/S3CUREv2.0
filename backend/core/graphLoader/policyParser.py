@@ -10,7 +10,7 @@ class PolicyParser:
         """
         self.graph = graph
 
-    def load_policy_to_graph(self, user_name, policy_name, policy_content):
+    def load_policy_to_graph(self, user_name, policy_name, policy_content, origin=None):
         """
         Ingests a full IAM Policy document and maps it to the graph topology.
         Establishes the lineage: User -> Policy -> Resource(s).
@@ -19,7 +19,7 @@ class PolicyParser:
         policy_id = f"policy:{policy_name}"
         self.graph.add_node(user_id, NodeType.USER)
         self.graph.add_node(policy_id, NodeType.POLICY)
-        self.graph.add_edge(user_id, policy_id, "HAS_POLICY")
+        self.graph.add_edge(user_id, policy_id, "HAS_POLICY", origin)
 
         statements = policy_content.get("Statement", [])
 
@@ -75,10 +75,4 @@ class PolicyParser:
         Parses an AWS ARN string to extract the relevant resource path or bucket name.
         Reduces visual noise in the graph for common S3 patterns.
         """
-        if arn == "*":
-            return "*"
-
-        if "arn:aws:s3:::" in arn:
-            return arn.split("arn:aws:s3:::")[-1]
-
-        return arn
+        return arn.removeprefix("arn:aws:s3:::")

@@ -7,6 +7,7 @@ class RiskRule(BaseModel):
     severity: int = Field(ge=0)
     resource_pattern: str = Field(min_length=1)
     risky_actions: list[str] = Field(min_length=1)
+    require_global_grant: bool | None = None
 
 
 class RiskRulesUpdate(BaseModel):

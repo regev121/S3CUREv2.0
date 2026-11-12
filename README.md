@@ -91,11 +91,11 @@ The dashboard shows the latest score per user, a seven-day trend, violation seve
 
 1. Resolve the user's direct policies and each group's policies. Take their set union and fetch each policy document once.
 2. Build a directed graph with three layers. Traverse from the user through each policy to its resources, at a fixed depth of two.
-3. Insert each resource path and its actions into a permission trie. Resource lookup collects exact grants and whole-segment wildcard grants along the path.
-4. For each risk rule, look up its resource and compare its risky actions against the collected grants. A matching rule contributes its severity once. The score is 100 times the sum of matching severities divided by the total severity. The eight default rules sum to 55. Production read and delete alone produce 34.55.
+3. Index each resource grant in a permission trie by the literal characters before its first wildcard. A search checks compatible prefixes and evaluates whether the grant and rule patterns can match a common string. The glob syntax supports '*' for zero or more characters and '?' for one character. A bare bucket selector in a risk rule covers that bucket and its objects. An exact bucket grant keeps its own scope.
+4. For each risk rule, find overlapping resource and action patterns. A rule with **Require a deployment-wide grant** enabled checks grants on all resources. For that mode, '*' and service-wide action selectors such as 's3:*' require full coverage. The saved default administrator rules use this mode. Each matching rule contributes its severity once. The score is 100 times the sum of matching severities divided by the total severity. The eight default rules sum to 55. Production read and delete alone produce 34.55.
 5. For a simulation, resolve the existing and proposed assignments separately, then evaluate both using the same fetched policy documents. A grant shared by two groups survives the removal of either group by itself.
 
-The engine models potential exposure through Allow paths. Conditions are stored on the graph edges as metadata and Deny statements are outside the risk calculation. A wildcard resource in a rule queries the trie root. Allowed action patterns support a trailing asterisk. Graph edges are stored in a list, so collecting edges for P policies costs O((P + 1)E) for E edges, plus trie construction and rule evaluation.
+The score measures potential exposure relative to the configured rules. The policy graph contains Allow statements and stores Condition as edge metadata. Effective authorization also depends on Deny statements and request context. Graph edges are stored in a list, so collecting edges for P policies costs O((P + 1)E) for E edges, plus trie construction and rule evaluation.
 
 ## Recovery provenance
 
