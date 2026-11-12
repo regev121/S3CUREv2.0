@@ -101,6 +101,16 @@ The score measures potential exposure relative to the configured rules. The poli
 
 This repository contains the recovered application, rebuilt from the surviving S3CURE source, sample IAM policies and project documentation. The recovery commits document the work performed to restore the system.
 
+## Reproducible demo
+
+Run from the repository root with the Python dependencies installed.
+
+```powershell
+python -m backend.demo_risk
+```
+
+The synthetic analyst starts in prod-editors and can read and delete production objects. The simulated move to prod-readers keeps read access and drops the delete grant. The score changes from 34.55 to 16.36 under the same default configuration. The JSON output includes the policy and group evidence, the ruleset fingerprint, and the simulated delta. The demo runs entirely in memory with synthetic IAM data.
+
 ## Verification
 
 ```powershell
