@@ -76,6 +76,16 @@ def test_anonymous_bucket_findings_use_the_principal_action_and_bucket_scope():
     assert engine._evaluate("Alice", {}, context={"aws:securetransport": False}) == (0, [])
 
 
+def test_deny_if_exists_distinguishes_absent_and_unknown_request_keys():
+    grant = {"Effect": "Allow", "Action": "s3:DeleteObject", "Resource": "arn:aws:s3:::prod-bucket/*"}
+    policy = {"Statement": [grant, {
+        **grant, "Effect": "Deny", "Condition": {"BoolIfExists": {"aws:SecureTransport": False}},
+    }]}
+    engine = RiskEngine(Loader())
+    assert engine._evaluate("Alice", {"editors": policy}, partial=False) == (0, [])
+    assert engine._evaluate("Alice", {"editors": policy})[1][0]["evidence"][0]["conditional"]
+
+
 def test_denials_with_exceptions_leave_the_named_action_or_prefix_available():
     scope = "arn:aws:s3:::prod-bucket/*"
     allow = {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": scope}

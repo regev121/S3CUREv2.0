@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.core.graphLoader.s3Loader import MinioError
+from backend.core.scan_index import indexed_records, summarize, utc
 
 
 SEVERITY_COLORS = {
@@ -25,20 +26,6 @@ def _risk_status(score):
     if score >= 40:
         return "Moderate"
     return "Healthy"
-
-
-def _severity(violation):
-    label = str(violation.get("rule", "")).partition(":")[0].title()
-    if label in SEVERITY_COLORS:
-        return label
-    score = violation.get("severity", 0)
-    if score >= 9:
-        return "Critical"
-    if score >= 7:
-        return "High"
-    if score >= 4:
-        return "Medium"
-    return "Low"
 
 
 def _average(rows):
@@ -147,18 +134,18 @@ def build_dashboard(loader, db):
     reports = []
     archive_available = True
     try:
-        for key, report, modified in loader.iter_reports():
-            scanned_at = datetime.fromisoformat(report["scanned_at"]) if report.get("scanned_at") else modified
-            if scanned_at.tzinfo is None:
-                scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+        summaries = indexed_records(db) if telemetry.get("databaseOnline", True) else None
+        if summaries is None:
+            summaries = (summarize(key, report, modified) for key, report, modified in loader.iter_reports())
+        for summary in summaries:
             reports.append({
-                "id": key,
-                "user": report["user"],
-                "score": report["risk_score"],
-                "riskConfigVersion": report.get("risk_config_version"),
-                "configCreatedAt": report.get("risk_config_created_at"),
-                "time": scanned_at,
-                "violations": report.get("violated_rules", []),
+                "id": summary["key"],
+                "user": summary["username"],
+                "score": summary["score"],
+                "riskConfigVersion": summary["config_version"],
+                "configCreatedAt": summary["config_created_at"],
+                "time": utc(summary["scanned_at"]),
+                "severityCounts": summary["severity_counts"],
             })
     except (BotoCoreError, ClientError, MinioError, KeyError, ValueError):
         archive_available = False
@@ -168,11 +155,9 @@ def build_dashboard(loader, db):
     latest = {row["user"]: row for row in reports}
     comparable = [row for row in latest.values() if row["riskConfigVersion"] == selected_version]
     current_score = _average(comparable)
-    violations = Counter(
-        _severity(violation)
-        for row in comparable for violation in row["violations"]
-        if isinstance(violation, dict)
-    )
+    violations = Counter()
+    for row in comparable:
+        violations.update(row["severityCounts"])
     most_at_risk = max(comparable, key=lambda row: row["score"], default=None)
 
     first_day = datetime.now(timezone.utc).date() - timedelta(days=6)

@@ -197,20 +197,6 @@ class S3Loader:
             if row.get("accessKey") and not self.is_scanner_name(row["accessKey"])
         )
 
-    def get_role(self, username):
-        if self.is_scanner_name(username):
-            return "USER"
-        try:
-            direct, groups = self.get_user_assignments(username)
-        except IdentityNotFound:
-            return "USER"
-        policies = direct.union(*groups.values())
-        if policies & {"consoleAdmin", "policy_admin"}:
-            return "ADMIN"
-        if "diagnostics" in policies:
-            return "AUDITOR"
-        return "USER"
-
     def list_policy_names(self):
         policies = self._mc(("admin", "policy", "list"), self.admin_alias)
         return sorted({row["policy"] for row in policies if isinstance(row.get("policy"), str)})

@@ -4,6 +4,10 @@ from ipaddress import ip_address, ip_network
 
 
 _VARIABLE = re.compile(r"\$\{([^{}]+)\}")
+_NEGATED = {"NotIpAddress", "StringNotLike", "StringNotEquals", "StringNotEqualsIgnoreCase"}
+_SUPPORTED = _NEGATED | {
+    "IpAddress", "StringLike", "StringEqualsIgnoreCase", "StringEquals", "Bool", "Null",
+}
 
 
 def substitute_variables(value, context, fallback):
@@ -12,7 +16,7 @@ def substitute_variables(value, context, fallback):
     def replace(match):
         nonlocal unresolved
         key = match[1].lower()
-        if key not in context:
+        if context.get(key) is None:
             unresolved = True
             return fallback
         return str(context[key])
@@ -35,40 +39,49 @@ def _evaluate(operator, actual, expected):
         matches = [actual.casefold() == value.casefold() for value in expected]
     elif operator in ("StringEquals", "StringNotEquals", "Bool"):
         matches = [actual == value for value in expected]
-    elif operator == "Null":
-        matches = [value == "false" for value in expected]  # The key is present.
-    else:
+    return not any(matches) if operator in _NEGATED else any(matches)
+
+
+def _string(value):
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def _compare(operator, key, values, context, partial):
+    base = operator.removesuffix("IfExists")
+    if_exists = base != operator
+    if base not in _SUPPORTED or (base == "Null" and if_exists):
         return None
-    return not any(matches) if operator.startswith(("Not", "StringNot")) else any(matches)
+    actual = context.get(key)
+    if actual is None:
+        if partial and key not in context:
+            return None
+        if base != "Null":
+            return if_exists or base in _NEGATED
+
+    values = values if isinstance(values, list) else [values]
+    if base == "Null":
+        expected = {_string(value) for value in values}
+        return _string(actual is None) in expected if expected <= {"true", "false"} and expected else None
+
+    expected = []
+    for value in values:
+        resolved, missing = substitute_variables(_string(value), context, "")
+        if missing:
+            return None
+        expected.append(resolved)
+    try:
+        return _evaluate(base, _string(actual), expected)
+    except ValueError:
+        return None
 
 
-def evaluate_conditions(conditions, context):
-    """Return True, False, or None when request context or operator support is incomplete."""
+def evaluate_conditions(conditions, context, *, partial=False):
+    """Evaluate a request. A partial scan context leaves omitted keys unknown."""
+    context = {key.lower(): value for key, value in context.items()}
     unresolved = False
     for operator, comparisons in conditions.items():
         for key, values in comparisons.items():
-            key = key.lower()
-            if key not in context:
-                unresolved = True
-                continue
-            actual = context[key]
-            actual = str(actual).lower() if isinstance(actual, bool) else str(actual)
-            if not isinstance(values, list):
-                values = [values]
-            expected = []
-            for value in values:
-                value = str(value).lower() if isinstance(value, bool) else str(value)
-                value, missing = substitute_variables(value, context, "")
-                if missing:
-                    break
-                expected.append(value)
-            try:
-                decision = (
-                    _evaluate(operator.removesuffix("IfExists"), actual, expected)
-                    if len(expected) == len(values) else None
-                )
-            except ValueError:
-                decision = None
+            decision = _compare(operator, key.lower(), values, context, partial)
             if decision is False:
                 return False
             unresolved |= decision is None

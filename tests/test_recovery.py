@@ -8,6 +8,8 @@ import pytest
 from botocore.exceptions import ClientError
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from backend.core.graphLoader.s3Loader import IdentityConflict, IdentityNotFound, MinioError, S3Loader
 from backend.provision_minio import scanner_policy
@@ -61,14 +63,20 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
     monkeypatch.setenv("PROCCESSED_SCAN_BUCKET", "test-processed")
     monkeypatch.delenv("LEGACY_SCAN_BUCKET", raising=False)
 
-    from backend.api.database.connection import SessionLocal, init_db
-    from backend.api.database.models import User
+    from backend.api.database import connection
+    from backend.api.database.models import AppRole, User
     from backend.api.deps import get_loader
     from backend.core.authentication.security import create_access_token, get_password_hash
-    from backend.core import dashboard
+    from backend.core import bulk_scans, dashboard
+    from backend.core.scan_index import backfill_scan_index
     from backend.main import app
 
     loader = S3Loader()
+    engine = create_engine(f"sqlite:///{(tmp_path / 'app.db').as_posix()}")
+    SessionLocal = sessionmaker(autoflush=False, bind=engine)
+    monkeypatch.setattr(connection, "engine", engine)
+    monkeypatch.setattr(connection, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(bulk_scans, "SessionLocal", SessionLocal)
     loader.s3 = ObjectStore()
     app.dependency_overrides[get_loader] = lambda: loader
     monkeypatch.setattr(dashboard, "urlopen", lambda *args, **kwargs:
@@ -120,11 +128,15 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
         raise AssertionError(f"Unexpected MinIO command: {command}")
 
     monkeypatch.setattr(loader, "_mc", fake_mc)
-    init_db()
+    connection.init_db()
     login_password = "app-password-for-test"
     password_hash = get_password_hash(login_password)
     with SessionLocal() as db:
-        db.add_all(User(username=name, hashed_password=password_hash) for name in [*users, "Scanner"])
+        accounts = {name: User(username=name, hashed_password=password_hash) for name in [*users, "Scanner"]}
+        db.add_all(accounts.values())
+        db.flush()
+        db.add_all([AppRole(user_id=accounts["Admin"].id, role="ADMIN"),
+                    AppRole(user_id=accounts["Auditor"].id, role="AUDITOR")])
         db.commit()
 
     try:
@@ -144,6 +156,10 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             assert client.get("/api/scan/config/risks", headers=admin).status_code == 200
             users["Admin"] = original_admin
             assert client.get("/api/auth/me", headers=auditor).json()["role"] == "AUDITOR"
+            original_alice = users["Alice"]
+            users["Alice"] = {"policyName": "consoleAdmin", "memberOf": []}
+            assert client.get("/api/auth/me", headers=alice).json()["role"] == "USER"
+            users["Alice"] = original_alice
             for name in ("scanner", "Scanner"):
                 credentials = {"username": name, "password": login_password}
                 assert client.post("/api/auth/login", data=credentials).status_code == 401
@@ -240,6 +256,14 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             assert failed.status_code == 503
             history = client.get("/api/scan/history/Alice", headers=alice).json()
             assert history["history_count"] == 1
+            with SessionLocal() as db:
+                assert backfill_scan_index(loader, db) == 2
+                assert backfill_scan_index(loader, db) == 2
+            with monkeypatch.context() as scoped:
+                scoped.setattr(loader, "iter_reports", lambda *args: pytest.fail("Archive should not be read."))
+                assert client.get("/api/scan/history/Alice?offset=1", headers=alice).json()["reports"] == []
+                assert client.get("/api/scan/history/Alice", headers=alice).json() == history
+                assert client.get("/api/scan/dashboard/stats", headers=auditor).json()["stats"]["totalUsersScanned"] == 2
             assert client.post("/api/scan/policy/attach", headers=admin,
                                json={"username": "Empty", "policy_name": "prod-read"}).status_code == 200
 
@@ -254,12 +278,16 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
 
             users["MinioOnly"] = {"policyName": "consoleAdmin", "memberOf": []}
             new_account = {"username": "FreshUser", "password": login_password}
-            assert client.post("/api/auth/register", json=new_account).status_code == 200
+            assert client.post("/api/auth/register", json=new_account).status_code == 401
+            assert client.post("/api/auth/register", headers=alice, json=new_account).status_code == 403
+            assert client.post("/api/auth/register", headers=auditor, json=new_account).status_code == 403
+            assert "FreshUser" not in users
+            assert client.post("/api/auth/register", headers=admin, json=new_account).status_code == 200
             assert "FreshUser" in users
             assert client.get("/api/auth/me", headers=login("FreshUser")).json()["role"] == "USER"
-            assert client.post("/api/auth/register", json={**new_account, "username": "freshuser"}).status_code == 409
-            assert client.post("/api/auth/register", json={**new_account, "username": "MinioOnly"}).status_code == 409
-            assert client.post("/api/auth/register", json={**new_account, "username": "FailedSignup"}).status_code == 503
+            assert client.post("/api/auth/register", headers=admin, json={**new_account, "username": "freshuser"}).status_code == 409
+            assert client.post("/api/auth/register", headers=admin, json={**new_account, "username": "MinioOnly"}).status_code == 409
+            assert client.post("/api/auth/register", headers=admin, json={**new_account, "username": "FailedSignup"}).status_code == 503
             assert not loader.provision_app_identity("FreshUser", link_existing=True)
             with pytest.raises(IdentityConflict):
                 loader.provision_app_identity("Scanner", link_existing=True)
@@ -267,9 +295,18 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
                 assert db.query(User).filter(User.username == "FreshUser").count() == 1
                 for name in ("FailedSignup", "MinioOnly", "freshuser"):
                     assert db.query(User).filter(User.username == name).count() == 0
+            assert client.post("/api/scan/initialize", headers=auditor).status_code == 403
+            response = client.post("/api/scan/all", headers=auditor)
+            assert response.status_code == 202 and response.json()["status"] == "queued"
+            job_path = "/api/scan/jobs/" + response.json()["job_id"]
+            assert client.get(job_path, headers=alice).status_code == 403
+            job = client.get(job_path, headers=auditor).json()
+            assert job["status"] == "completed" and job["scanned"] == job["total"] and job["failed"] == 0
+            assert client.get("/api/scan/history/Alice?limit=1", headers=alice).json()["history_count"] == 2
 
     finally:
         app.dependency_overrides.clear()
+        engine.dispose()
 
 
 def test_scanner_policy_limits_writes_to_its_buckets():

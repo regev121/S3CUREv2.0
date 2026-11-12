@@ -24,10 +24,10 @@ export default function Register() {
     setLoading(true);
     try {
       await api.post("/api/auth/register", { username, password });
-      navigate("/login", { replace: true });
+      navigate("/iam", { replace: true, state: { accountCreated: username } });
     } catch (err) {
       const msg = err.response?.data?.detail ?? "Registration failed.";
-      setError(Array.isArray(msg) ? msg.join(", ") : msg);
+      setError(Array.isArray(msg) ? msg.map((issue) => issue.msg).join(", ") : msg);
     } finally {
       setLoading(false);
     }
@@ -44,9 +44,9 @@ export default function Register() {
             />
           </div>
           <div>
-            <CardTitle>S3CURE</CardTitle>
+            <CardTitle>Create S3CURE account</CardTitle>
             <p className="text-body-secondary small mb-0 mt-1">
-              Create an account
+              Create an app login and a MinIO identity with the same username.
             </p>
           </div>
         </div>
@@ -81,13 +81,12 @@ export default function Register() {
             loading={loading}
             disabled={loading}
           >
-            Register
+            Create account
           </Button>
         </form>
         <p className="mt-4 text-center small text-body-secondary mb-0">
-          Already have an account?{" "}
-          <Link to="/login" className="text-primary fw-medium">
-            Sign in
+          <Link to="/iam" className="text-primary fw-medium">
+            Back to IAM Manager
           </Link>
         </p>
       </CardContent>

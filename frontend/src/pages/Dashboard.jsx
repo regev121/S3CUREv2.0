@@ -16,6 +16,7 @@ import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import { useBulkScan } from "../services/bulkScan";
 
 const CHART_COLORS = {
   line: "#0d6efd",
@@ -96,7 +97,7 @@ export default function Dashboard() {
   const [telemetry, setTelemetry] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [scanLoading, setScanLoading] = useState(false);
+  const { run: runBulkScan, busy: scanLoading, progress: scanProgress } = useBulkScan();
 
   /**
    * Retrieves dashboard analytics from the backend.
@@ -133,16 +134,14 @@ export default function Dashboard() {
   const handleGlobalScan = async () => {
       if (!window.confirm("Run a comprehensive Global Scan for all users? This might take a few moments.")) return;
 
-      setScanLoading(true);
       try {
-          const { data } = await api.post("/api/scan/all");
+          const result = await runBulkScan("/api/scan/all");
+          if (!result) return;
           await fetchDashboardData();
-          const failures = data.details.filter((row) => row.status === "error").length;
-          if (failures) setError("Unable to complete " + failures + " scan(s).");
+          if (result.status !== "completed") setError("Bulk scan " + result.status + ".");
+          else if (result.failed) setError("Unable to complete " + result.failed + " scan(s).");
       } catch (error) {
           setError(error.response?.data?.detail || "Unable to run the global scan.");
-      } finally {
-          setScanLoading(false);
       }
   };
 
@@ -185,7 +184,7 @@ export default function Dashboard() {
                 {scanLoading ? (
                     <>
                         <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                        Scanning...
+                        {scanProgress}
                     </>
                 ) : (
                     <>

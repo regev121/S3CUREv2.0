@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from backend.api.database.connection import get_db
-from backend.api.database.models import User
+from backend.api.database.models import AppRole, User
 from backend.core.authentication.security import SECRET_KEY, ALGORITHM
 from backend.core.graphLoader.s3Loader import S3Loader
 
@@ -39,5 +39,6 @@ def get_current_user(
     return user
 
 
-def get_requester_role(user=Depends(get_current_user), loader=Depends(get_loader)):
-    return loader.get_role(user.username)
+def get_requester_role(user=Depends(get_current_user), db: Session = Depends(get_db)):
+    assignment = db.get(AppRole, user.id)
+    return assignment.role if assignment else "USER"

@@ -28,6 +28,7 @@ function ProtectedRoutes() {
         <Route path="scan" element={<Scan />} />
         <Route path="simulation" element={<PrivateRoute roles={["ADMIN"]}><Simulation /></PrivateRoute>} />
         <Route path="iam" element={<PrivateRoute roles={["ADMIN"]}><IamManager /></PrivateRoute>} />
+        <Route path="iam/accounts/new" element={<PrivateRoute roles={["ADMIN"]}><Register /></PrivateRoute>} />
         <Route path="config" element={<PrivateRoute roles={["ADMIN"]}><Config /></PrivateRoute>} />
       </Route>
     </>
@@ -39,7 +40,6 @@ function AppRoutes() {
     <Routes>
       <Route element={<AuthLayout />}>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
       </Route>
       {ProtectedRoutes()}
       <Route path="*" element={<NotFound />} />

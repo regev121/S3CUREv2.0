@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { Link as RouterLink, useLocation } from "react-router-dom";
 import { Users, Shield, UserPlus, UserMinus, Link, Unlink } from "lucide-react";
 import api from "../services/api";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
@@ -64,6 +65,7 @@ function IamAction({ action, tab, catalog, busy, onAction }) {
 }
 
 export default function IamManager() {
+  const { state } = useLocation();
   const [activeTab, setActiveTab] = useState("policies");
   const [catalog, setCatalog] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -100,11 +102,15 @@ export default function IamManager() {
         <div className="bg-primary bg-opacity-10 p-2 rounded">
           <Users className="text-primary" size={24} />
         </div>
-        <div>
+        <div className="flex-grow-1">
           <h1 className="h3 fw-bold text-light mb-0">IAM Manager</h1>
           <p className="text-body-secondary mb-0 small">Manage users, groups, and policy attachments in MinIO.</p>
         </div>
+        <RouterLink to="/iam/accounts/new" className="btn btn-primary">Create account</RouterLink>
       </div>
+      {state?.accountCreated && (
+        <div className="alert alert-success" role="status">Account created for {state.accountCreated}.</div>
+      )}
 
       <div className="row g-3">
         <div className="col-lg-8">

@@ -5,6 +5,7 @@ class RequestContext(BaseModel):
     source_ip: IPvAnyAddress | None = None
     secure_transport: bool | None = None
     s3_prefix: str | None = None
+    partial: bool = False
 
     def policy_values(self):
         return {

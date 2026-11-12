@@ -13,7 +13,7 @@ from backend.core.graphLoader.policyParser import PolicyParser, as_list, policy_
 from backend.core.graphLoader.trie import PermissionTrie, has_uncovered_match, patterns_overlap
 
 
-SCORING_MODEL = "effective-access-v2"
+SCORING_MODEL = "effective-access-v3"
 
 BUCKET_ACTIONS = {
     "s3:ListBucket", "s3:DeleteBucket", "s3:PutBucketPolicy", "s3:PutBucketAcl",
@@ -66,8 +66,8 @@ def _pair(action, resource):
     return f"{action}\0{resource}"
 
 
-def _grants(policy, actions, resources, conditions, not_actions, not_resources, context):
-    decision = evaluate_conditions(conditions, context)
+def _grants(policy, actions, resources, conditions, not_actions, not_resources, context, partial):
+    decision = evaluate_conditions(conditions, context, partial=partial)
     if decision is False:
         return
     excluded_resources = []
@@ -164,7 +164,7 @@ class RiskEngine:
         read_policies = getattr(self.loader, "get_bucket_policies", None)
         return read_policies() if read_policies else ({}, "unavailable")
 
-    def _evaluate(self, username, policies, origins=None, context=None):
+    def _evaluate(self, username, policies, origins=None, context=None, *, partial=True):
         self.graph.clear()
         self.graph.add_node(f"user:{username}", NodeType.USER)
         origins = origins or {}
@@ -172,18 +172,18 @@ class RiskEngine:
             self.parser.load_policy_to_graph(username, name, content, origins.get(name))
         return self._calculate_risk_score(username, {
             **(context or {}), "aws:username": username, "aws:userid": username, "aws:principaltype": "User",
-        })
+        }, partial)
 
     def analyze_user(self, username):
         return self.analyze_user_return_data(username)[0]
 
-    def analyze_user_return_data(self, username):
+    def analyze_user_return_data(self, username, *, on_archived=None):
         grants = self.loader.get_user_access_data(username)
         policies = {item["name"]: item["content"] for item in grants}
         origins = {item["name"]: item["origin"] for item in grants}
         risk_score, violations = self._evaluate(username, policies, origins)
         graph = self._export_graph_to_json()
-        self.loader.archive_scan_result(username, {
+        report = {
             "user": username,
             "risk_score": risk_score,
             "risk_config_version": self.config_version,
@@ -191,11 +191,14 @@ class RiskEngine:
             "bucket_policy_coverage": self.bucket_policy_snapshot[1],
             "violated_rules": violations,
             "policies_analyzed": sorted(policies),
-        }, graph)
+        }
+        archived = self.loader.archive_scan_result(username, report, graph)
+        if on_archived:
+            on_archived(archived["raw"], report, datetime.fromisoformat(archived["scanned_at"]))
         return risk_score, violations, graph
 
     def compare_simulation(self, username, add_policies=(), remove_policies=(), add_groups=(), remove_groups=(),
-                           context=None):
+                           context=None, *, partial=True):
         direct, groups = self.loader.get_user_assignments(username)
         original = direct.union(*groups.values())
         simulated_direct = (direct - set(remove_policies)) | set(add_policies)
@@ -209,10 +212,12 @@ class RiskEngine:
 
         # Shared policies are loaded once so the baseline and the simulation use the same snapshot.
         documents = {name: self.loader.get_policy(name) for name in sorted(original | simulated)}
-        current_score, _ = self._evaluate(username, {name: documents[name] for name in original}, context=context)
+        current_score, _ = self._evaluate(
+            username, {name: documents[name] for name in original}, context=context, partial=partial,
+        )
         simulated_score, violations = self._evaluate(
             username, {name: documents[name] for name in simulated},
-            policy_origins(simulated_direct, simulated_groups), context,
+            policy_origins(simulated_direct, simulated_groups), context, partial=partial,
         )
         return current_score, simulated_score, violations
 
@@ -222,7 +227,7 @@ class RiskEngine:
         )
         return simulated_score, violations
 
-    def _identity_permissions(self, username, context):
+    def _identity_permissions(self, username, context, partial):
         user_trie = PermissionTrie()
         allows = defaultdict(set)
         denies = set()
@@ -235,7 +240,7 @@ class RiskEngine:
                 metadata = p_edge["metadata"]
                 grants = _grants(
                     policy_name, metadata["actions"], [p_edge["target"].removeprefix("resource:")],
-                    metadata["conditions"], metadata["not_actions"], metadata["not_resources"], context,
+                    metadata["conditions"], metadata["not_actions"], metadata["not_resources"], context, partial,
                 )
                 allowed = p_edge["type"] == "ALLOWS"
                 for grant in grants:
@@ -294,7 +299,7 @@ class RiskEngine:
             return None
         return True
 
-    def _anonymous_permissions(self, context):
+    def _anonymous_permissions(self, context, partial):
         context = {
             **context, "aws:principaltype": "Anonymous", "aws:username": "", "aws:userid": "",
         }
@@ -315,7 +320,7 @@ class RiskEngine:
                              if arn == "*" or arn.startswith("arn:aws:s3:::")]
                 grants = _grants(
                     statement.get("Sid") or "Bucket policy", actions, resources, statement.get("Condition", {}),
-                    not_actions, [arn.removeprefix("arn:aws:s3:::") for arn in not_resources], context,
+                    not_actions, [arn.removeprefix("arn:aws:s3:::") for arn in not_resources], context, partial,
                 )
                 (allows if effect == "Allow" else denies).update(grants)
             permissions[bucket] = allows, denies
@@ -343,13 +348,13 @@ class RiskEngine:
                         }
         return [evidence[key] for key in sorted(evidence)]
 
-    def _rule_selectors(self, rule, context):
+    def _rule_selectors(self, rule, context, partial):
         if rule.get("policy"):
             statements = policy_statements(rule["policy"])
             by_effect = defaultdict(set)
             for statement in statements:
                 by_effect[statement["Effect"]].update(
-                    _grants("", **statement_scope(statement), context=context)
+                    _grants("", **statement_scope(statement), context=context, partial=partial)
                 )
             if any(statement["Effect"] == "Allow" for statement in statements):
                 return by_effect["Allow"], by_effect["Deny"]
@@ -361,9 +366,9 @@ class RiskEngine:
             Grant(action, resource, "", True) for resource in resources for action in rule["risky_actions"]
         }, set()
 
-    def _identity_evidence(self, rule, trie, allows, denies, origins, context):
+    def _identity_evidence(self, rule, trie, allows, denies, origins, context, partial):
         evidence = {}
-        selectors, template_denies = self._rule_selectors(rule, context)
+        selectors, template_denies = self._rule_selectors(rule, context, partial)
         denied = denies | template_denies
         for selector in selectors:
             for pattern, actions in trie.matching_grants(selector.resource):
@@ -393,15 +398,15 @@ class RiskEngine:
                         }
         return [evidence[key] for key in sorted(evidence)]
 
-    def _calculate_risk_score(self, username, context):
-        identity = self._identity_permissions(username, context)
-        anonymous = self._anonymous_permissions(context)
+    def _calculate_risk_score(self, username, context, partial):
+        identity = self._identity_permissions(username, context, partial)
+        anonymous = self._anonymous_permissions(context, partial)
         violations = []
         rules = self.risk_rules["risk_rules"]
         for rule in rules:
             evidence = (
                 self._public_evidence(rule, anonymous) if _public_rule(rule)
-                else self._identity_evidence(rule, *identity, context)
+                else self._identity_evidence(rule, *identity, context, partial)
             )
             if evidence:
                 violations.append({

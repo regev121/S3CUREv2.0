@@ -43,10 +43,7 @@ api.interceptors.response.use(
       localStorage.removeItem("s3cure_token");
 
       // Prevent redirection loop if already on authentication pages
-      if (
-        !window.location.pathname.startsWith("/login") &&
-        !window.location.pathname.startsWith("/register")
-      ) {
+      if (!window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }
     }

@@ -53,7 +53,10 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 
 
 @router.post("/register")
-def register(user: UserRegister, db: Session = Depends(get_db), loader=Depends(get_loader)):
+def register(user: UserRegister, role=Depends(get_requester_role),
+             db: Session = Depends(get_db), loader=Depends(get_loader)):
+    if role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only admins can create S3CURE accounts.")
     if len(user.password.encode("utf-8")) > 72:
         raise HTTPException(status_code=422, detail="Password must be at most 72 bytes.")
     lock_app_identity(db, user.username)

@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
+from functools import partial
 
-from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, Depends, HTTPException
+from botocore.exceptions import ClientError
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.api.database.connection import get_db
@@ -11,7 +12,9 @@ from backend.api.dto.policyAttachment import PolicyAttachmentRequest
 from backend.api.dto.risk import RiskRule, RiskRulesUpdate
 from backend.api.dto.simulation import SimulationRequest
 from backend.core.dashboard import build_dashboard
+from backend.core.bulk_scans import get_job, job_data, queue_scan, run_bulk_scan
 from backend.core.graphLoader.riskEngine import RiskEngine, risk_rule_catalog
+from backend.core.scan_index import record_scan, scan_history
 
 router = APIRouter()
 REVIEW_ROLES = ("ADMIN", "AUDITOR")
@@ -35,10 +38,10 @@ def get_all_users(role=Depends(get_requester_role), loader=Depends(get_loader)):
 
 @router.post("/user/{username}")
 def scan_user(username, requester=Depends(get_current_user), role=Depends(get_requester_role),
-              loader=Depends(get_loader)):
+              loader=Depends(get_loader), db: Session = Depends(get_db)):
     _require_target(loader, requester, role, username)
     engine = RiskEngine(loader)
-    score, violations, graph = engine.analyze_user_return_data(username)
+    score, violations, graph = engine.analyze_user_return_data(username, on_archived=partial(record_scan, db))
     return {
         "message": "Scan complete",
         "user": username,
@@ -55,41 +58,41 @@ def scan_user(username, requester=Depends(get_current_user), role=Depends(get_re
 
 @router.get("/history/{username}")
 def get_user_history(username, requester=Depends(get_current_user), role=Depends(get_requester_role),
-                     loader=Depends(get_loader)):
+                     loader=Depends(get_loader), db: Session = Depends(get_db),
+                     limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0)):
     _require_target(loader, requester, role, username)
-    reports = [
-        {"filename": key, "last_modified": modified.isoformat(), "score": report["risk_score"],
-         "risk_config_version": report.get("risk_config_version")}
-        for key, report, modified in loader.iter_reports(username)
-    ]
-    reports.sort(key=lambda report: report["last_modified"], reverse=True)
-    return {"user": username, "history_count": len(reports), "reports": reports}
+    count, reports = scan_history(loader, db, username, limit, offset)
+    return {"user": username, "history_count": count, "reports": reports}
 
 
-def _bulk_scan(loader):
-    engine = RiskEngine(loader)
-    results = []
-    for username in loader.get_all_users():
-        try:
-            score, _, _ = engine.analyze_user_return_data(username)
-            results.append({"user": username, "status": "scanned", "score": score})
-        except (RuntimeError, OSError, ValueError) as error:
-            results.append({"user": username, "status": "error", "error": str(error)})
-        except (ClientError, BotoCoreError):
-            results.append({"user": username, "status": "error", "error": "Scan storage failed."})
-    return {"message": "Bulk scan complete", "details": results}
+def _start_bulk_scan(tasks, db, loader):
+    job, created = queue_scan(db)
+    if created:
+        tasks.add_task(run_bulk_scan, job["job_id"], loader)
+    return job
 
 
-@router.post("/initialize")
-def initialize_scans(role=Depends(get_requester_role), loader=Depends(get_loader)):
+@router.post("/initialize", status_code=202)
+def initialize_scans(tasks: BackgroundTasks, role=Depends(get_requester_role),
+                     loader=Depends(get_loader), db: Session = Depends(get_db)):
     _require_role(role, ("ADMIN",))
-    return _bulk_scan(loader)
+    return _start_bulk_scan(tasks, db, loader)
 
 
-@router.post("/all")
-def run_global_scan(role=Depends(get_requester_role), loader=Depends(get_loader)):
+@router.post("/all", status_code=202)
+def run_global_scan(tasks: BackgroundTasks, role=Depends(get_requester_role),
+                    loader=Depends(get_loader), db: Session = Depends(get_db)):
     _require_role(role, REVIEW_ROLES)
-    return _bulk_scan(loader)
+    return _start_bulk_scan(tasks, db, loader)
+
+
+@router.get("/jobs/{job_id}")
+def bulk_scan_status(job_id: str, role=Depends(get_requester_role), db: Session = Depends(get_db)):
+    _require_role(role, REVIEW_ROLES)
+    job = get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan job not found.")
+    return job_data(job)
 
 
 @router.get("/simulate/options/{username}")
@@ -111,6 +114,7 @@ def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
         request.username, request.add_policies, request.remove_policies,
         request.add_groups, request.remove_groups,
         context=request.context.policy_values() if request.context else None,
+        partial=request.context.partial if request.context else True,
     )
     delta = round(simulated - current, 2)
     return {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Shield } from "lucide-react";
 import api from "../../services/api";
 import { useAuth } from "../../context/auth";
@@ -100,12 +100,6 @@ export default function Login() {
             Sign In
           </Button>
         </form>
-        <p className="mt-4 text-center small text-body-secondary mb-0">
-          Don&apos;t have an account?{" "}
-          <Link to="/register" className="text-primary fw-medium">
-            Register
-          </Link>
-        </p>
       </CardContent>
     </Card>
   );

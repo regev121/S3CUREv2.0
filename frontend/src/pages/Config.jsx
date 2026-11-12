@@ -4,6 +4,7 @@ import { BookOpen, Plus, Pencil, Save, ScanLine, Search, Trash2 } from "lucide-r
 import { Card, CardContent } from "../components/Card";
 import { Button } from "../components/Button";
 import api from "../services/api";
+import { useBulkScan } from "../services/bulkScan";
 import RuleEditor from "./RuleEditor";
 
 function ruleTitle(rule) {
@@ -84,7 +85,7 @@ export default function Config() {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [scanning, setScanning] = useState(false);
+  const { run: runBulkScan, busy: scanning, progress: scanProgress } = useBulkScan();
   const [message, setMessage] = useState(null);
 
   const load = useCallback(async (signal) => {
@@ -164,20 +165,18 @@ export default function Config() {
 
   const scanAll = async () => {
     if (!window.confirm("Run a new scan for every user with the saved configuration?")) return;
-    setScanning(true);
     setMessage(null);
     try {
-      const { data } = await api.post("/api/scan/initialize");
-      const scanned = data.details.filter((result) => result.status === "scanned").length;
-      const failed = data.details.length - scanned;
+      const result = await runBulkScan("/api/scan/initialize");
+      if (!result) return;
+      const { status, scanned, failed } = result;
       setMessage({
-        type: failed ? "warning" : "success",
-        text: "Scanned " + scanned + " users." + (failed ? " " + failed + " scans failed." : ""),
+        type: status !== "completed" ? "danger" : failed ? "warning" : "success",
+        text: status !== "completed" ? "Bulk scan " + status + "." :
+          "Scanned " + scanned + " users." + (failed ? " " + failed + " scans failed." : ""),
       });
     } catch (error) {
       setMessage({ type: "danger", text: responseMessage(error, "Unable to scan all users.") });
-    } finally {
-      setScanning(false);
     }
   };
 
@@ -222,6 +221,7 @@ export default function Config() {
               <Button variant="secondary" size="sm" onClick={scanAll} loading={scanning} disabled={saving}>
                 <ScanLine size={16} className="me-2" />Scan all users
               </Button>
+              {scanning && <span className="small text-body-secondary" role="status">{scanProgress}</span>}
             </div>
 
             <fieldset disabled={saving} className="m-0 p-0 border-0">

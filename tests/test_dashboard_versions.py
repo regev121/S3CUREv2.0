@@ -6,6 +6,7 @@ from backend.core import dashboard
 
 def test_dashboard_compares_only_users_scanned_with_the_latest_configuration(monkeypatch):
     monkeypatch.setattr(dashboard, "_availability", lambda loader, db: {})
+    monkeypatch.setattr(dashboard, "indexed_records", lambda db: None)
     now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
     loader = Mock()
     loader.iter_reports.return_value = [

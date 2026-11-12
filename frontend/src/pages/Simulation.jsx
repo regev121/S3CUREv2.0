@@ -62,6 +62,7 @@ export default function Simulation() {
   const [sourceIp, setSourceIp] = useState("");
   const [transport, setTransport] = useState("");
   const [prefix, setPrefix] = useState("");
+  const [completeContext, setCompleteContext] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -100,6 +101,7 @@ export default function Simulation() {
         source_ip: sourceIp.trim() || null,
         secure_transport: transport === "" ? null : transport === "https",
         s3_prefix: prefix || null,
+        partial: !completeContext,
       };
       const { data } = await api.post("/api/scan/simulate", { username, ...changes, context });
       setResult(data);
@@ -174,6 +176,13 @@ export default function Simulation() {
                 <label className="form-label text-body-secondary small" htmlFor="s3-prefix">Bucket listing prefix</label>
                 <input id="s3-prefix" className="form-control bg-dark text-light border-secondary"
                   value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+                <div className="form-check mt-2">
+                  <input id="complete-context" type="checkbox" className="form-check-input"
+                    checked={completeContext} onChange={(event) => setCompleteContext(event.target.checked)} />
+                  <label className="form-check-label text-body-secondary small" htmlFor="complete-context">
+                    Treat omitted request keys as absent
+                  </label>
+                </div>
               </fieldset>
               {error && <div role="alert" className="alert alert-danger py-2">{error}</div>}
               <div className="mt-4">

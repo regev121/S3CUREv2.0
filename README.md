@@ -47,13 +47,20 @@ The provisioner uses the admin alias to create the buckets and attach `s3cure-sc
 
 The recovery inventory in minio-restore.json documents the sample buckets and IAM policy definitions. Configure assignments for the identities in your MinIO deployment.
 
-For a new, empty PostgreSQL database, run python setupDb.py explicitly to create the app tables.
-
-For a named MinIO account with `consoleAdmin`, `policy_admin` or `diagnostics` attached directly or through a group, enroll its app login with the operator command below. Use the named IAM account rather than the server root login. The public registration form is for new identities.
+Use a named MinIO account to enroll the first application administrator. Application roles live in PostgreSQL and are assigned with the operator command.
 
 ```powershell
-python setupDb.py --app-user YourMinioUsername
+python setupDb.py --app-user YourMinioUsername --role ADMIN
+python setupDb.py --index-scans
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+For an existing database, assign application roles to the accounts that should retain access, then index the archive. The setup commands add any missing tables and reuse existing accounts. Set a role to `USER` to remove the elevated app assignment.
+
+```powershell
+python setupDb.py --set-role ExistingAdmin ADMIN
+python setupDb.py --set-role ExistingAuditor AUDITOR
+python setupDb.py --index-scans
 ```
 
 In a second PowerShell terminal, start the frontend.
@@ -68,7 +75,7 @@ Open the Vite address printed in the terminal. Set `VITE_API_BASE_URL` when the 
 
 ## Sync app users to MinIO
 
-Registration creates an IAM identity with the same username when it creates a S3CURE account. Run the sync command for accounts already in PostgreSQL. It reads the database and creates only missing MinIO identities. It preserves existing IAM passwords, policies and group memberships. The scanner uses its MinIO credentials directly. The app reserves the scanner name regardless of case and excludes historical scanner rows from login and account sync. Other names that differ only by case require review.
+In IAM Manager, a signed-in administrator can create a S3CURE account and a MinIO identity with the same username. New accounts start with the application role `USER`. Run the sync command for accounts already in PostgreSQL. It reads the database and creates only missing MinIO identities. It preserves existing IAM passwords, policies and group memberships. The scanner uses its MinIO credentials directly. The app reserves the scanner name regardless of case and excludes historical scanner rows from login and account sync. Other names that differ only by case require review.
 
 ```powershell
 python -m backend.sync_minio_users
@@ -85,6 +92,8 @@ The scanner flattens direct and inherited policies into a `User → Policy → R
 
 `RAW_SCAN_BUCKET` stores the JSON report and `PROCCESSED_SCAN_BUCKET` stores the matching JS graph. Each scan has a timestamped UTC prefix, so repeated scans retain their history while keeping filenames such as `Alice_Scan_Raw.json` and `Alice_Scan_Processed.js`. Dashboard and history include completed pairs. If an older `reports/` archive exists, set `LEGACY_SCAN_BUCKET` and grant scanner read access to that prefix separately.
 
+After indexing, the Dashboard and scan history read compact records from PostgreSQL. Run `python setupDb.py --index-scans` again after importing an external archive or to reconcile reports left by an interrupted write. User history accepts `limit` and `offset` and returns the total count. Bulk scans return HTTP 202 and a job ID. The Dashboard and Config poll the job endpoint for progress. Run one bulk scan at a time. A job with no recorded progress for 30 minutes is marked interrupted and can be started again.
+
 Each new scan stores a SHA-256 fingerprint of the effective rules and scoring model. The dashboard defaults to a seven-day trend across configurations and averages the last scan for each user on each day with scans. The dropdown also shows the history for individual configurations and for legacy scans. Configuration labels use `CONFIG_Creation_Date:dd/mm/yyyy`. When creation metadata is missing, the dashboard labels the date as the first archived scan for that version. Current risk and severity metrics compare users under the latest scanned configuration. The dashboard also shows the last scan and live service telemetry. `MINIO_TELEMETRY_ALIAS` can be set to a read-only MinIO alias with `admin:ServerInfo` for disk capacity and uptime. By default it uses the configured admin alias.
 
 ## How the risk engine works
@@ -93,7 +102,7 @@ Each new scan stores a SHA-256 fingerprint of the effective rules and scoring mo
 2. Build a directed graph with three layers. Traverse from the user through each policy to its resources, at a fixed depth of two.
 3. Index each resource grant in a permission trie by the literal characters before its first wildcard. A search checks compatible prefixes and evaluates whether the grant and rule patterns can match a common string. The glob syntax supports '*' for zero or more characters and '?' for one character. A bare bucket selector in a risk rule covers that bucket and its objects. An exact bucket grant keeps its own scope.
 4. Apply explicit Deny to the overlapping action and resource scope, including `NotAction` and `NotResource` exceptions. A deployment-wide rule requires coverage of the full action and resource scope. For other rules, access outside a denied scope can still trigger a finding.
-5. Evaluate supported IAM conditions against the request context. The Simulator accepts a source IP, HTTP or HTTPS, and an S3 listing prefix. The engine supports IP ranges, booleans and common string comparisons. Missing context and unsupported conditions are marked as unresolved. Findings retain the policy and resource pattern, plus direct or group provenance.
+5. Evaluate supported IAM conditions against the request context. The Simulator accepts a source IP, HTTP or HTTPS, and an S3 listing prefix. For a complete request, `IfExists` matches an absent key and `Null` tests key presence. During a scan, unknown request values and unsupported conditions are marked as unresolved. Findings retain the policy and resource pattern, plus direct or group provenance.
 6. For R001, inspect the MinIO bucket policy for anonymous read or listing access within the bucket's scope. The scanner reads bucket names and policies using `s3:ListAllMyBuckets` and `s3:GetBucketPolicy`. Run `python -m backend.provision_minio` to update those scanner permissions on an existing deployment.
 7. For a simulation, resolve the existing and proposed assignments separately, then evaluate both using the same identity and bucket policy snapshots. A grant shared by two groups survives the removal of either group by itself.
 
@@ -129,4 +138,9 @@ npm run lint
 npm run build
 ```
 
-The backend integration test runs against temporary SQLite and an in-memory MinIO stand-in. A deployment with working MinIO S3 access is required to exercise the live provisioning and archive writes.
+The API suite uses temporary SQLite and an in-memory MinIO stand-in. To also test against MinIO, configure a local endpoint and matching admin alias in `.env`, then run the opt-in test. It creates and removes its own buckets, policies, and users, and exercises Allow, Deny, and the scanner's archive permissions.
+
+```powershell
+$env:S3CURE_RUN_MINIO_TESTS = '1'
+python -m pytest tests/test_minio_live.py -q
+```
