@@ -99,6 +99,12 @@ Each new scan stores a SHA-256 fingerprint of the effective rules and scoring mo
 
 The score measures potential exposure relative to the configured rules, including findings with unresolved conditions. Each matching rule contributes its severity once. The score is 100 times the sum of matching severities divided by the total severity. The eight default rules sum to 55. Graph edges are stored in a list, so collecting edges for P policies costs O((P + 1)E) for E edges, plus trie construction and rule evaluation.
 
+## Risk configuration
+
+Use **Config** to edit active rules or add templates from the rule catalog. Templates cover IAM administration, access keys, availability, sensitive data, audit retention, and encryption. Each change stays in the draft until you save the configuration. Run **Scan all users** to score the latest permissions under the saved rules.
+
+**Manual JSON** accepts a pasted IAM policy or a JSON file. **Import from MinIO** reads a named identity policy and copies its document into the editor. An Allow statement defines an action and resource combination to flag. In a mixed document, Deny statements exclude matching scope. A Deny-only document defines access to flag when the scanned identity still has it. Conditions use the same request context as scans and simulations. Saving a rule updates S3CURE's scoring configuration in MinIO.
+
 ## Recovery provenance
 
 This repository contains the recovered application, rebuilt from the surviving S3CURE source, sample IAM policies and project documentation. The recovery commits document the work performed to restore the system.

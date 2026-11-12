@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 from dotenv import load_dotenv
 
-from backend.core.graphLoader.s3Loader import IdentityNotFound, S3Loader
+from backend.core.graphLoader.s3Loader import IdentityNotFound, LEGACY_RISK_CONFIG_KEY, RISK_CONFIG_KEY, S3Loader
 
 
 def scanner_policy(raw_bucket, processed_bucket):
@@ -22,7 +22,8 @@ def scanner_policy(raw_bucket, processed_bucket):
         {"Effect": "Allow", "Action": ["s3:GetBucketLocation"], "Resource": [raw, processed]},
         {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [processed]},
         {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": [
-            f"{raw}/scans/*", f"{processed}/scans/*", f"{processed}/config/risks.json",
+            f"{raw}/scans/*", f"{processed}/scans/*",
+            f"{processed}/{LEGACY_RISK_CONFIG_KEY}", f"{processed}/{RISK_CONFIG_KEY}",
         ]},
     ]}
 

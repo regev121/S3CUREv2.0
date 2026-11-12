@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from hashlib import sha256
 from io import BytesIO
 import json
 from unittest.mock import MagicMock
@@ -17,15 +18,24 @@ class ObjectStore:
         self.objects = {}
         self.failed_bucket = None
 
-    def put_object(self, Bucket, Key, Body, ContentType):
+    def put_object(self, Bucket, Key, Body, ContentType, IfMatch=None, IfNoneMatch=None):
         if Bucket == self.failed_bucket:
             raise ClientError({"Error": {"Code": "AccessDenied"}}, "PutObject")
+        current = self.objects.get((Bucket, Key))
+        if (IfNoneMatch and current) or (IfMatch and (not current or self.etag(current[0]) != IfMatch)):
+            raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
         self.objects[Bucket, Key] = Body, ContentType, datetime.now(timezone.utc)
+        return {"ETag": self.etag(Body)}
+
+    @staticmethod
+    def etag(body):
+        return sha256(body).hexdigest()
 
     def get_object(self, Bucket, Key):
         if (Bucket, Key) not in self.objects:
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
-        return {"Body": BytesIO(self.objects[Bucket, Key][0])}
+        body = self.objects[Bucket, Key][0]
+        return {"Body": BytesIO(body), "ETag": self.etag(body)}
 
     def get_paginator(self, operation):
         assert operation == "list_objects_v2"
@@ -153,6 +163,16 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             catalog = client.get("/api/scan/iam/options", headers=admin).json()
             assert catalog["users"] == ["Admin", "Alice", "Auditor", "Empty"]
             assert catalog["policies"] == ["prod-read"]
+            assert client.get("/api/scan/config/policies", headers=auditor).status_code == 403
+            assert client.get("/api/scan/config/policies", headers=admin).json()["policies"] == ["prod-read"]
+            assert client.get("/api/scan/config/policies/prod-read", headers=admin).json()["policy"] == policy
+            assert len(client.get("/api/scan/config/risk-catalog", headers=admin).json()["rules"]) == 14
+            manual_rule = {"description": "Import example", "severity": 4, "policy": policy}
+            validated = client.post("/api/scan/config/risks/validate", headers=admin, json=manual_rule)
+            assert validated.status_code == 200 and validated.json()["policy"] == policy
+            assert client.post("/api/scan/config/risks/validate", headers=admin, json={
+                **manual_rule, "policy": {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject"}]},
+            }).status_code == 422
             assert client.post("/api/scan/policy/attach", headers=auditor,
                                json={"username": "Alice", "policy_name": "prod-read"}).status_code == 403
 
@@ -222,6 +242,15 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             assert history["history_count"] == 1
             assert client.post("/api/scan/policy/attach", headers=admin,
                                json={"username": "Empty", "policy_name": "prod-read"}).status_code == 200
+
+            loader.s3.failed_bucket = None
+            changes = {"risk_rules": [*rules, validated.json()], "base_revision": None}
+            saved = client.post("/api/scan/config/risks", headers=admin, json=changes)
+            assert saved.status_code == 200
+            assert saved.json()["revision"]
+            assert client.post("/api/scan/config/risks", headers=admin, json=changes).status_code == 409
+            changes["base_revision"] = saved.json()["revision"]
+            assert client.post("/api/scan/config/risks", headers=admin, json=changes).status_code == 200
 
             users["MinioOnly"] = {"policyName": "consoleAdmin", "memberOf": []}
             new_account = {"username": "FreshUser", "password": login_password}

@@ -1,0 +1,278 @@
+[
+  {
+    "id": "C001",
+    "description": "CRITICAL: Change IAM permissions",
+    "severity": 10,
+    "category": "Identity & access",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:CreatePolicy",
+            "admin:AttachUserOrGroupPolicy",
+            "admin:UpdatePolicyAssociation",
+            "admin:AddUserToGroup"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C002",
+    "description": "HIGH: Create or modify MinIO access keys",
+    "severity": 8,
+    "category": "Identity & access",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:CreateServiceAccount",
+            "admin:UpdateServiceAccount"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C003",
+    "description": "HIGH: Disable MinIO users or groups",
+    "severity": 7,
+    "category": "Identity & access",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:DisableUser",
+            "admin:DeleteUser",
+            "admin:DisableGroup"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C004",
+    "description": "CRITICAL: Import an IAM configuration",
+    "severity": 9,
+    "category": "Identity & access",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:ImportIAM"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C005",
+    "description": "CRITICAL: Stop, restart, or update MinIO",
+    "severity": 9,
+    "category": "Availability",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:ServiceStop",
+            "admin:ServiceRestart",
+            "admin:ServerUpdate"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C006",
+    "description": "HIGH: Change MinIO server configuration",
+    "severity": 8,
+    "category": "Availability",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:ConfigUpdate"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C007",
+    "description": "MEDIUM: View live server logs or traces",
+    "severity": 5,
+    "category": "Audit & retention",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "admin:ConsoleLog",
+            "admin:ServerTrace"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C008",
+    "description": "HIGH: Overwrite production objects",
+    "severity": 8,
+    "category": "Data protection",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject"
+          ],
+          "Resource": [
+            "arn:aws:s3:::prod-bucket/*"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C009",
+    "description": "HIGH: Read finance data or older object versions",
+    "severity": 7,
+    "category": "Data protection",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject",
+            "s3:GetObjectVersion"
+          ],
+          "Resource": [
+            "arn:aws:s3:::finance-data-bucket/*"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C010",
+    "description": "CRITICAL: Delete finance data or its versions",
+    "severity": 9,
+    "category": "Data protection",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:DeleteObject",
+            "s3:DeleteObjectVersion"
+          ],
+          "Resource": [
+            "arn:aws:s3:::finance-data-bucket/*"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C011",
+    "description": "HIGH: Change audit log expiration or object lock",
+    "severity": 8,
+    "category": "Audit & retention",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutLifecycleConfiguration",
+            "s3:PutBucketObjectLockConfiguration"
+          ],
+          "Resource": [
+            "arn:aws:s3:::audit-logs-bucket",
+            "arn:aws:s3:::logs-bucket"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C012",
+    "description": "CRITICAL: Override retention or legal holds",
+    "severity": 9,
+    "category": "Audit & retention",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:BypassGovernanceRetention",
+            "s3:PutObjectRetention",
+            "s3:PutObjectLegalHold"
+          ],
+          "Resource": [
+            "arn:aws:s3:::prod-bucket/*",
+            "arn:aws:s3:::audit-logs-bucket/*"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C013",
+    "description": "HIGH: Change replication for sensitive buckets",
+    "severity": 8,
+    "category": "Data protection",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutReplicationConfiguration"
+          ],
+          "Resource": [
+            "arn:aws:s3:::prod-bucket",
+            "arn:aws:s3:::finance-data-bucket"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "C014",
+    "description": "CRITICAL: Delete encryption keys",
+    "severity": 10,
+    "category": "Encryption",
+    "policy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "kms:DeleteKey"
+          ],
+          "Resource": [
+            "*"
+          ]
+        }
+      ]
+    }
+  }
+]

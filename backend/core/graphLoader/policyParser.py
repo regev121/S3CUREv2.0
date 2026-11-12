@@ -5,6 +5,28 @@ def as_list(value):
     return [value] if isinstance(value, str) else (value or [])
 
 
+def policy_statements(document):
+    statements = document.get("Statement", [])
+    return [statements] if isinstance(statements, dict) else statements
+
+
+def statement_scope(statement):
+    not_actions = as_list(statement.get("NotAction"))
+    not_resources = as_list(statement.get("NotResource"))
+    actions = as_list(statement.get("Action")) or (["*"] if not_actions else [])
+    service_scope = (actions or not_actions) and all(
+        action.startswith(("admin:", "kms:", "sts:")) for action in (not_actions or actions)
+    )
+    resources = as_list(statement.get("Resource")) or (["*"] if not_resources or service_scope else [])
+    return {
+        "actions": actions,
+        "resources": [arn.removeprefix("arn:aws:s3:::") for arn in resources],
+        "conditions": statement.get("Condition") or {},
+        "not_actions": not_actions,
+        "not_resources": [arn.removeprefix("arn:aws:s3:::") for arn in not_resources],
+    }
+
+
 class PolicyParser:
     def __init__(self, graph: SecurityGraph):
         """
@@ -25,13 +47,7 @@ class PolicyParser:
         self.graph.add_node(policy_id, NodeType.POLICY)
         self.graph.add_edge(user_id, policy_id, "HAS_POLICY", origin)
 
-        statements = policy_content.get("Statement", [])
-
-        # Normalize single-dict statement to list format
-        if isinstance(statements, dict):
-            statements = [statements]
-
-        for stmt in statements:
+        for stmt in policy_statements(policy_content):
             self._process_statement(policy_id, stmt)
 
     def _process_statement(self, policy_id, statement):
@@ -44,34 +60,13 @@ class PolicyParser:
         if effect not in ("Allow", "Deny"):
             return
 
-        not_actions = as_list(statement.get("NotAction"))
-        not_resources = as_list(statement.get("NotResource"))
-        actions = as_list(statement.get("Action")) or (["*"] if not_actions else [])
-        resources = as_list(statement.get("Resource")) or (["*"] if not_resources else [])
-        conditions = statement.get("Condition", {})
-
-        for resource_arn in resources:
-            # Normalize ARN to a readable resource identifier
-            resource_name = self._normalize_resource_name(resource_arn)
-
-            # Register Resource Entity
+        metadata = statement_scope(statement)
+        for resource_name in metadata.pop("resources"):
             resource_id = f"resource:{resource_name}"
             self.graph.add_node(resource_id, NodeType.RESOURCE)
-
-            # Establish Relationship: Policy allows access to Resource
             self.graph.add_edge(
                 source=policy_id,
                 target=resource_id,
                 relationship_type="ALLOWS" if effect == "Allow" else "DENIES",
-                metadata={
-                    "actions": actions, "conditions": conditions, "not_actions": not_actions,
-                    "not_resources": [self._normalize_resource_name(arn) for arn in not_resources],
-                },
+                metadata=metadata,
             )
-
-    def _normalize_resource_name(self, arn):
-        """
-        Parses an AWS ARN string to extract the relevant resource path or bucket name.
-        Reduces visual noise in the graph for common S3 patterns.
-        """
-        return arn.removeprefix("arn:aws:s3:::")

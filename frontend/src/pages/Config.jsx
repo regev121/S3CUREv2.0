@@ -1,437 +1,286 @@
-import { useState, useEffect } from "react";
-import api from "../services/api";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from "../components/Card";
+import { useCallback, useEffect, useState } from "react";
+import { Badge, Form, Spinner } from "react-bootstrap";
+import { BookOpen, Plus, Pencil, Save, ScanLine, Search, Trash2 } from "lucide-react";
+import { Card, CardContent } from "../components/Card";
 import { Button } from "../components/Button";
-import { useAuth } from "../context/auth";
-import { Table, Badge, Modal, Form, Spinner } from "react-bootstrap";
-import {
-  Settings,
-  Plus,
-  Edit,
-  Trash2,
-  Save,
-  RotateCcw,
-} from "lucide-react";
+import api from "../services/api";
+import RuleEditor from "./RuleEditor";
 
-/**
- * Risk Configuration Management Page.
- * Allows administrators to define, weight, and manage global risk detection rules.
- * Features:
- * - CRUD operations for Role-Based Assessment Criteria.
- * - System-wide Scan Initialization.
- * - Role-Based Access Control (Admin only for edits).
- */
+function ruleTitle(rule) {
+  return rule.description.replace(/^(CRITICAL|HIGH|MEDIUM|LOW):\s*/i, "");
+}
+
+function ruleCategory(rule) {
+  return rule.category || "General";
+}
+
+function weightTone(weight) {
+  if (weight >= 9) return "danger";
+  if (weight >= 7) return "warning";
+  return "secondary";
+}
+
+function RuleRow({ rule, onEdit, onRemove, onAdd, added }) {
+  return (
+    <article className="config-rule">
+      <div className="d-flex flex-wrap align-items-start justify-content-between gap-3">
+        <div className="config-rule-title">
+          <div className="d-flex flex-wrap gap-2 align-items-center">
+            <h3 className="h6 mb-0">{ruleTitle(rule)}</h3>
+            <Badge bg={weightTone(rule.severity)} pill>Weight {rule.severity}</Badge>
+          </div>
+          <p className="text-body-secondary small mt-1 mb-0">
+            {[ruleCategory(rule), rule.source_policy ? "MinIO · " + rule.source_policy :
+              rule.policy ? "IAM policy" : "Guided rule"].join(" · ")}
+          </p>
+        </div>
+        <div className="d-flex align-items-center gap-2">
+          {onEdit && (
+            <>
+              <Button variant="secondary" size="sm" onClick={onEdit}
+                aria-label={"Edit " + ruleTitle(rule)}><Pencil size={14} className="me-1" />Edit</Button>
+              <Button variant="ghost" size="sm" onClick={onRemove}
+                aria-label={"Remove " + ruleTitle(rule)}><Trash2 size={16} /></Button>
+            </>
+          )}
+          {onAdd && (
+            <Button variant="secondary" size="sm" disabled={added} onClick={onAdd}>
+              {added ? "Added" : "Add rule"}
+            </Button>
+          )}
+        </div>
+      </div>
+      <details className="mt-2 small">
+        <summary className="text-body-secondary">View matching criteria</summary>
+        {rule.policy ? (
+          <pre className="config-policy-preview p-3 rounded mt-2 mb-0">{JSON.stringify(rule.policy, null, 2)}</pre>
+        ) : (
+          <dl className="config-rule-scope mt-2 mb-0">
+            <dt>Resource</dt><dd><code>{rule.resource_pattern}</code></dd>
+            <dt>Actions</dt><dd><code>{rule.risky_actions?.join(", ")}</code></dd>
+            {rule.require_global_grant && <><dt>Scope</dt><dd>Deployment-wide access</dd></>}
+          </dl>
+        )}
+      </details>
+    </article>
+  );
+}
+
+function responseMessage(error, fallback) {
+  const detail = error.response?.data?.detail;
+  return typeof detail === "string" ? detail : fallback;
+}
+
 export default function Config() {
-  const { user } = useAuth();
   const [rules, setRules] = useState([]);
-  const [configLabel, setConfigLabel] = useState("");
+  const [savedRules, setSavedRules] = useState(rules);
+  const [catalog, setCatalog] = useState([]);
+  const [revision, setRevision] = useState(null);
+  const [label, setLabel] = useState("");
+  const [view, setView] = useState("rules");
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
+  const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [initLoading, setInitLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [message, setMessage] = useState(null);
 
-  // Modal State Management
-  const [showModal, setShowModal] = useState(false);
-  const [editingIndex, setEditingIndex] = useState(null); // null indicates Creation Mode
-  const [formData, setFormData] = useState({
-    description: "",
-    severity: 10,
-    resource_pattern: "",
-    risky_actions: "",
-    require_global_grant: false,
-  });
-
-  const canEdit = user?.role === "ADMIN";
-
-  useEffect(() => {
-    fetchRules();
+  const load = useCallback(async (signal) => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const [{ data: config }, { data: templates }] = await Promise.all([
+        api.get("/api/scan/config/risks", { signal }),
+        api.get("/api/scan/config/risk-catalog", { signal }),
+      ]);
+      setRules(config.risk_rules);
+      setSavedRules(config.risk_rules);
+      setRevision(config.revision ?? null);
+      setLabel(config.label);
+      setCatalog(templates.rules);
+      setLoadFailed(false);
+    } catch (error) {
+      if (!signal?.aborted) {
+        setLoadFailed(true);
+        setMessage({ type: "danger", text: responseMessage(error, "Unable to load the risk configuration.") });
+      }
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }, []);
 
-  /**
-   * Retrieves the current risk configuration from the backend.
-   */
-  const fetchRules = async () => {
-    setLoading(true);
-    try {
-      const { data } = await api.get("/api/scan/config/risks");
-      setConfigLabel(data.label ?? "");
-      // Backward compatibility: Handle both wrapper object and direct array responses
-      if (data.risk_rules) {
-        setRules(data.risk_rules);
-      } else if (Array.isArray(data)) {
-        setRules(data);
-      } else {
-        setRules([]);
-      }
-    } catch (err) {
-      console.error("Failed to load rules", err);
-      setRules([]);
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    const request = new AbortController();
+    load(request.signal);
+    return () => request.abort();
+  }, [load]);
+
+  const dirty = rules !== savedRules;
+  const activeIds = new Set(rules.map((rule) => rule.id).filter(Boolean));
+  const available = catalog.filter((rule) => !activeIds.has(rule.id));
+  const rows = view === "rules" ? rules : catalog;
+  const categories = [...new Set(rows.map(ruleCategory))].sort();
+  const term = query.trim().toLowerCase();
+  const visible = rows.map((rule, index) => ({ rule, index })).filter(({ rule }) =>
+    (!category || ruleCategory(rule) === category) &&
+    (!term || JSON.stringify(rule).toLowerCase().includes(term))
+  );
+  const totalWeight = rules.reduce((sum, rule) => sum + rule.severity, 0);
+
+  const selectView = (next) => {
+    setView(next);
+    setCategory("");
   };
 
-  /**
-   * Triggers a system-wide initialization of security scans for all users.
-   * This is a batch operation to populate the dashboard.
-   */
-  const handleInitialize = async () => {
-      if (!window.confirm("This will scan ALL users in the system. Continue?")) return;
-      setInitLoading(true);
-      try {
-          const { data } = await api.post("/api/scan/initialize");
-          alert(`Initialization Complete: ${data.details.length} users scanned.`);
-      } catch (e) {
-          alert("Initialization failed: " + e.message);
-      } finally {
-          setInitLoading(false);
-      }
+  const addRules = (entries) => {
+    setRules((current) => [...current, ...entries]);
+    setMessage(null);
   };
 
-  // --- CRUD Operations ---
-
-  const handleAdd = () => {
-    setFormData({
-      description: "",
-      severity: 10,
-      resource_pattern: "",
-      risky_actions: "",
-      require_global_grant: false,
-    });
-    setEditingIndex(null);
-    setShowModal(true);
+  const applyRule = (rule) => {
+    setRules((current) => editing.index === null ? [...current, rule] :
+      current.map((entry, index) => index === editing.index ? rule : entry));
+    setEditing(null);
+    setMessage(null);
   };
 
-  const handleEdit = (index) => {
-    const rule = rules[index];
-    setFormData({
-      description: rule.description,
-      severity: rule.severity,
-      resource_pattern: rule.resource_pattern,
-      risky_actions: Array.isArray(rule.risky_actions)
-        ? rule.risky_actions.join(", ")
-        : rule.risky_actions || "",
-      require_global_grant: Boolean(rule.require_global_grant),
-    });
-    setEditingIndex(index);
-    setShowModal(true);
-  };
-
-  const handleDelete = (index) => {
-    if (window.confirm("Are you sure you want to delete this rule?")) {
-      const newRules = [...rules];
-      newRules.splice(index, 1);
-      setRules(newRules);
-    }
-  };
-
-  const handleSaveModal = (e) => {
-    e.preventDefault();
-
-    // Normalize actions string to array
-    const actionsArray = formData.risky_actions
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-
-    const newRule = {
-      id: rules[editingIndex]?.id,
-      description: formData.description,
-      severity: parseInt(formData.severity),
-      resource_pattern: formData.resource_pattern,
-      risky_actions: actionsArray,
-      require_global_grant: formData.require_global_grant,
-    };
-
-    const newRules = [...rules];
-    if (editingIndex !== null) {
-      newRules[editingIndex] = newRule;
-    } else {
-      newRules.push(newRule);
-    }
-
-    setRules(newRules);
-    setShowModal(false);
-  };
-
-  /**
-   * Persists the local modified ruleset to the backend.
-   */
-  const handleSaveChanges = async () => {
+  const save = async () => {
     setSaving(true);
+    setMessage(null);
     try {
-      const { data } = await api.post("/api/scan/config/risks", { risk_rules: rules });
-      setConfigLabel(data.label ?? "");
-      alert("Configuration saved successfully!");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to save configuration.");
+      const { data } = await api.post("/api/scan/config/risks", { risk_rules: rules, base_revision: revision });
+      setRevision(data.revision);
+      setLabel(data.label);
+      setSavedRules(rules);
+      setMessage({ type: "success", text: "Configuration saved. The next scan will use these rules." });
+    } catch (error) {
+      setMessage({ type: "danger", text: responseMessage(error, "Unable to save the risk configuration.") });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleReset = () => {
-    if (window.confirm("Discard unsaved changes and reload from server?")) {
-      fetchRules();
+  const scanAll = async () => {
+    if (!window.confirm("Run a new scan for every user with the saved configuration?")) return;
+    setScanning(true);
+    setMessage(null);
+    try {
+      const { data } = await api.post("/api/scan/initialize");
+      const scanned = data.details.filter((result) => result.status === "scanned").length;
+      const failed = data.details.length - scanned;
+      setMessage({
+        type: failed ? "warning" : "success",
+        text: "Scanned " + scanned + " users." + (failed ? " " + failed + " scans failed." : ""),
+      });
+    } catch (error) {
+      setMessage({ type: "danger", text: responseMessage(error, "Unable to scan all users.") });
+    } finally {
+      setScanning(false);
     }
   };
 
   return (
-    <div>
-      <div className="d-flex justify-content-between align-items-center mb-4">
+    <section className="risk-config" aria-labelledby="risk-config-heading">
+      <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
         <div>
-          <h1 className="h2 fw-bold text-light mb-1">Risk Configuration</h1>
-          <p className="text-body-secondary mb-0">
-            {configLabel || "Manage detection rules and risk scoring logic."}
-          </p>
+          <h1 id="risk-config-heading" className="h2 fw-bold text-light mb-1">Risk configuration</h1>
+          <p className="text-body-secondary mb-0">Choose which permissions affect the risk score.</p>
         </div>
-        <div className="d-flex gap-2">
-           <Button
-              variant="outline-secondary"
-              onClick={handleInitialize}
-              loading={initLoading}
-              disabled={initLoading}
-              className="d-flex align-items-center gap-2"
-           >
-              <RotateCcw size={16} />
-              Initialize Scans
-           </Button>
-           {canEdit && (
-              <>
-                 <Button
-                    variant="secondary"
-                    onClick={handleReset}
-                    disabled={saving}
-                    className="d-flex align-items-center gap-2"
-                 >
-                    <RotateCcw size={16} />
-                    Reset
-                 </Button>
-                 <Button
-                    variant="primary"
-                    onClick={handleSaveChanges}
-                    loading={saving}
-                    disabled={saving}
-                    className="d-flex align-items-center gap-2"
-                 >
-                    <Save size={16} />
-                    Save Changes
-                 </Button>
-              </>
-           )}
+        <div className="d-flex flex-wrap align-items-center gap-2">
+          {dirty && <span className="small text-warning me-1">Unsaved changes</span>}
+          {(dirty || loadFailed) && (
+            <Button variant="secondary" onClick={() => load()} disabled={saving || loading}>
+              {dirty ? "Discard draft" : "Retry"}
+            </Button>
+          )}
+          <Button onClick={save} disabled={loading || loadFailed || !dirty} loading={saving}>
+            <Save size={16} className="me-2" />Save configuration
+          </Button>
         </div>
       </div>
 
-      <Card className="border-secondary">
-        <CardHeader className="d-flex justify-content-between align-items-center border-secondary">
-          <CardTitle className="d-flex align-items-center gap-2">
-            <Settings className="text-primary" />
-            Detection Rules
-          </CardTitle>
-          {canEdit && (
-            <Button size="sm" variant="success" onClick={handleAdd}>
-              <Plus size={16} className="me-1" />
-              Add Rule
-            </Button>
-          )}
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="text-center py-5">
-              <Spinner animation="border" variant="primary" />
+      {message && <div className={"alert alert-" + message.type + " py-2"} role="status">{message.text}</div>}
+
+      {loading ? <div className="text-center py-5"><Spinner animation="border" variant="primary" /></div> :
+        !loadFailed && (
+          <>
+            <div className="config-summary border border-secondary rounded px-3 py-3 mb-4">
+              <div>
+                <span className="d-block small text-body-secondary">{dirty ? "Rules in draft" : "Active rules"}</span>
+                <strong className="fs-5">{rules.length}</strong>
+              </div>
+              <div>
+                <span className="d-block small text-body-secondary">Total weight</span>
+                <strong className="fs-5">{totalWeight}</strong>
+              </div>
+              <div className="flex-grow-1">
+                <span className="d-block small text-body-secondary">Saved configuration</span>
+                <strong className="text-break">{label}</strong>
+              </div>
+              <Button variant="secondary" size="sm" onClick={scanAll} loading={scanning} disabled={saving}>
+                <ScanLine size={16} className="me-2" />Scan all users
+              </Button>
             </div>
-          ) : (
-            <Table
-              hover
-              variant="dark"
-              responsive
-              className="mb-0 align-middle"
-              style={{ background: "transparent" }}
-            >
-              <thead className="bg-dark text-body-secondary">
-                <tr>
-                  <th style={{ width: "5%" }}>#</th>
-                  <th style={{ width: "30%" }}>Description</th>
-                  <th style={{ width: "10%" }}>Severity</th>
-                  <th style={{ width: "20%" }}>Resource Pattern</th>
-                  <th style={{ width: "25%" }}>Risky Actions</th>
-                  {canEdit && <th style={{ width: "10%" }} className="text-end">Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((rule, idx) => (
-                  <tr key={idx}>
-                    <td className="text-body-secondary">{idx + 1}</td>
-                    <td className="fw-medium text-light">{rule.description}</td>
-                    <td>
-                      <Badge
-                        bg={
-                          rule.severity >= 9
-                            ? "danger" // Critical
-                            : rule.severity >= 7
-                            ? "warning" // High
-                            : "info" // Medium/Low
-                        }
-                        className="px-2 py-1"
-                      >
-                        {rule.severity}
-                      </Badge>
-                    </td>
-                    <td className="text-info font-monospace small">
-                      {rule.resource_pattern}
-                    </td>
-                    <td>
-                      <div className="d-flex flex-wrap gap-1">
-                        {(rule.risky_actions || []).map((action, i) => (
-                          <Badge
-                            key={i}
-                            bg="secondary"
-                            className="fw-normal font-monospace small"
-                          >
-                            {action}
-                          </Badge>
-                        ))}
-                      </div>
-                    </td>
-                    {canEdit && (
-                      <td className="text-end">
-                        <Button
-                          variant="link"
-                          size="sm"
-                          className="text-primary p-1 me-1"
-                          onClick={() => handleEdit(idx)}
-                        >
-                          <Edit size={16} />
-                        </Button>
-                        <Button
-                          variant="link"
-                          size="sm"
-                          className="text-danger p-1"
-                          onClick={() => handleDelete(idx)}
-                        >
-                          <Trash2 size={16} />
-                        </Button>
-                      </td>
+
+            <fieldset disabled={saving} className="m-0 p-0 border-0">
+              <Card>
+                <CardContent className="p-0">
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 px-3 pt-3">
+                    <div className="config-tabs nav nav-pills gap-1" role="group" aria-label="Rule views">
+                      <button type="button" className={"nav-link" + (view === "rules" ? " active" : "")}
+                        aria-pressed={view === "rules"} onClick={() => selectView("rules")}>Active rules</button>
+                      <button type="button" className={"nav-link" + (view === "catalog" ? " active" : "")}
+                        aria-pressed={view === "catalog"} onClick={() => selectView("catalog")}>
+                        <BookOpen size={16} className="me-2" />Rule catalog
+                      </button>
+                    </div>
+                    {view === "rules" ? (
+                      <Button onClick={() => setEditing({ index: null, rule: null })}>
+                        <Plus size={16} className="me-2" />Add rule
+                      </Button>
+                    ) : (
+                      <Button onClick={() => addRules(available)} disabled={!available.length}>Add all available rules</Button>
                     )}
-                  </tr>
-                ))}
-                {rules.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="text-center py-4 text-body-secondary">
-                      No rules defined.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                  </div>
+                  <div className="d-flex flex-wrap gap-2 p-3 border-bottom border-secondary">
+                    <div className="config-search">
+                      <Search size={17} aria-hidden="true" />
+                      <Form.Control type="search" aria-label="Search rules" placeholder="Search rules, actions or resources"
+                        value={query} onChange={(event) => setQuery(event.target.value)} />
+                    </div>
+                    <Form.Select aria-label="Filter by category" className="w-auto" value={category}
+                      onChange={(event) => setCategory(event.target.value)}>
+                      <option value="">All categories</option>
+                      {categories.map((name) => <option key={name} value={name}>{name}</option>)}
+                    </Form.Select>
+                  </div>
+                  {visible.length ? (
+                    <div>
+                      {visible.map(({ rule, index }) => (
+                        <RuleRow key={rule.id ?? index} rule={rule}
+                          onEdit={view === "rules" ? () => setEditing({ index, rule }) : undefined}
+                          onRemove={() => {
+                            setRules((current) => current.filter((_, position) => position !== index));
+                            setMessage(null);
+                          }}
+                          onAdd={view === "catalog" ? () => addRules([rule]) : undefined}
+                          added={activeIds.has(rule.id)} />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-body-secondary text-center p-4 mb-0">
+                      {rows.length ? "No rules match your search." : "Add a rule or choose one from the catalog."}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </fieldset>
+          </>
+        )}
 
-      {/* Edit/Add Modal */}
-      <Modal
-        show={showModal}
-        onHide={() => setShowModal(false)}
-        centered
-        variant="dark"
-        contentClassName="bg-dark border-secondary text-light"
-      >
-        <Modal.Header closeButton className="border-secondary">
-          <Modal.Title>{editingIndex !== null ? "Edit Rule" : "Add Rule"}</Modal.Title>
-        </Modal.Header>
-        <Form onSubmit={handleSaveModal}>
-          <Modal.Body>
-            <Form.Group className="mb-3">
-              <Form.Label>Description</Form.Label>
-              <Form.Control
-                type="text"
-                required
-                className="bg-dark border-secondary text-light focus-ring-primary"
-                value={formData.description}
-                onChange={(e) =>
-                  setFormData({ ...formData, description: e.target.value })
-                }
-              />
-            </Form.Group>
-
-            <div className="row">
-              <div className="col-md-4">
-                <Form.Group className="mb-3">
-                  <Form.Label>Severity (1-10)</Form.Label>
-                  <Form.Control
-                    type="number"
-                    min="1"
-                    max="10"
-                    required
-                    className="bg-dark border-secondary text-light"
-                    value={formData.severity}
-                    onChange={(e) =>
-                      setFormData({ ...formData, severity: e.target.value })
-                    }
-                  />
-                </Form.Group>
-              </div>
-              <div className="col-md-8">
-                <Form.Group className="mb-3">
-                  <Form.Label>Resource Pattern (AWS ARN / Glob)</Form.Label>
-                  <Form.Control
-                    type="text"
-                    required
-                    placeholder="e.g., arn:aws:s3:::* or *"
-                    className="bg-dark border-secondary text-light font-monospace"
-                    value={formData.resource_pattern}
-                    onChange={(e) =>
-                      setFormData({ ...formData, resource_pattern: e.target.value })
-                    }
-                  />
-                </Form.Group>
-              </div>
-            </div>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Risky Actions (Comma separated)</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={3}
-                required
-                placeholder="e.g., s3:PutObject, s3:DeleteBucket"
-                className="bg-dark border-secondary text-light font-monospace"
-                value={formData.risky_actions}
-                onChange={(e) =>
-                  setFormData({ ...formData, risky_actions: e.target.value })
-                }
-              />
-              <Form.Text className="text-body-secondary">
-                 Separate multiple actions with commas. Wildcards supported.
-              </Form.Text>
-            </Form.Group>
-            <Form.Check
-              id="require-global-grant"
-              label="Require a deployment-wide grant"
-              checked={formData.require_global_grant}
-              onChange={(e) =>
-                setFormData({ ...formData, require_global_grant: e.target.checked })
-              }
-            />
-            <Form.Text className="text-body-secondary">
-              Match grants on all resources. With * or s3:* in the action list, require the full action scope.
-            </Form.Text>
-          </Modal.Body>
-          <Modal.Footer className="border-secondary">
-            <Button variant="outline-secondary" onClick={() => setShowModal(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" type="submit">
-              {editingIndex !== null ? "Update Rule" : "Add Rule"}
-            </Button>
-          </Modal.Footer>
-        </Form>
-      </Modal>
-    </div>
+      {editing && <RuleEditor rule={editing.rule} onClose={() => setEditing(null)} onApply={applyRule} />}
+    </section>
   );
 }

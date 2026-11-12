@@ -9,7 +9,7 @@ from typing import NamedTuple
 from backend.core.graphLoader.conditions import evaluate_conditions, substitute_variables
 from backend.core.graphLoader.s3Loader import S3Loader, policy_origins
 from backend.core.graphLoader.graph import SecurityGraph, NodeType
-from backend.core.graphLoader.policyParser import PolicyParser, as_list
+from backend.core.graphLoader.policyParser import PolicyParser, as_list, policy_statements, statement_scope
 from backend.core.graphLoader.trie import PermissionTrie, has_uncovered_match, patterns_overlap
 
 
@@ -18,8 +18,14 @@ SCORING_MODEL = "effective-access-v2"
 BUCKET_ACTIONS = {
     "s3:ListBucket", "s3:DeleteBucket", "s3:PutBucketPolicy", "s3:PutBucketAcl",
     "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration",
+    "s3:PutLifecycleConfiguration", "s3:PutBucketObjectLockConfiguration",
+    "s3:PutReplicationConfiguration",
 }
-OBJECT_ACTIONS = {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"}
+OBJECT_ACTIONS = {
+    "s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject",
+    "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention",
+    "s3:PutObjectRetention", "s3:PutObjectLegalHold",
+}
 
 
 class Grant(NamedTuple):
@@ -80,6 +86,8 @@ def _grants(policy, actions, resources, conditions, not_actions, not_resources, 
                         tuple(sorted(not_actions)), tuple(sorted(excluded_resources)))
 
 def _requires_global_grant(rule):
+    if rule.get("policy"):
+        return False
     configured = rule.get("require_global_grant")
     if configured is not None:
         return configured
@@ -95,6 +103,30 @@ def _requires_global_grant(rule):
         actions == ["s3:*"]
         and (rule.get("id") == "R008" or description == "CRITICAL: Full Administrative Power")
     )
+
+
+def _fingerprint_rule(rule):
+    payload = {"description": rule["description"], "severity": rule.get("severity", 10)}
+    if rule.get("policy"):
+        statements = []
+        for statement in policy_statements(rule["policy"]):
+            scope = statement_scope(statement)
+            for key in ("actions", "resources", "not_actions", "not_resources"):
+                scope[key] = sorted(set(scope[key]))
+            statements.append(json.dumps({"effect": statement["Effect"], **scope}, sort_keys=True))
+        payload["policy"] = sorted(set(statements))
+    else:
+        payload.update({
+            "resource": rule["resource_pattern"].removeprefix("arn:aws:s3:::"),
+            "actions": sorted(set(rule["risky_actions"])),
+            "require_global_grant": rule["require_global_grant"],
+            "public_access": _public_rule(rule),
+        })
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def risk_rule_catalog():
+    return json.loads(Path(__file__).with_name("risk_catalog.json").read_text(encoding="utf-8"))
 
 
 class RiskEngine:
@@ -115,17 +147,7 @@ class RiskEngine:
             ],
         }
 
-        effective_rules = [
-            json.dumps({
-                "description": rule["description"],
-                "severity": rule.get("severity", 10),
-                "resource": rule["resource_pattern"].removeprefix("arn:aws:s3:::"),
-                "actions": sorted(set(rule["risky_actions"])),
-                "require_global_grant": rule["require_global_grant"],
-                "public_access": _public_rule(rule),
-            }, sort_keys=True, separators=(",", ":"))
-            for rule in self.risk_rules["risk_rules"]
-        ]
+        effective_rules = [_fingerprint_rule(rule) for rule in self.risk_rules["risk_rules"]]
         fingerprint = json.dumps([SCORING_MODEL, sorted(effective_rules)], separators=(",", ":"))
         self.config_version = sha256(fingerprint.encode("utf-8")).hexdigest()
         self.config_created_at = rules.get("created_at")
@@ -231,13 +253,13 @@ class RiskEngine:
         return (selector,)
 
     @staticmethod
-    def _match(grant, action, resource, denies, global_only=False, scope=None):
+    def _match(grant, action, resource, denies, global_only=False, scope=None, template_exceptions=()):
         if not patterns_overlap(grant.action, action) or not patterns_overlap(grant.resource, resource):
             return False
         rule_pattern = _pair(action, resource)
         grant_pattern = _pair(grant.action, grant.resource)
         required = (rule_pattern, grant_pattern)
-        exceptions = grant.exceptions
+        exceptions = grant.exceptions + template_exceptions
         if action in BUCKET_ACTIONS:
             exceptions += (_pair(action, "*/*"),)
         elif action in OBJECT_ACTIONS and scope is None:
@@ -279,10 +301,7 @@ class RiskEngine:
         permissions = {}
         for bucket, policy in self.bucket_policy_snapshot[0].items():
             allows, denies = set(), set()
-            statements = policy.get("Statement", [])
-            if isinstance(statements, dict):
-                statements = [statements]
-            for statement in statements:
+            for statement in policy_statements(policy):
                 if not _anonymous_principal(statement.get("Principal")):
                     continue
                 effect = statement.get("Effect")
@@ -324,27 +343,54 @@ class RiskEngine:
                         }
         return [evidence[key] for key in sorted(evidence)]
 
-    def _identity_evidence(self, rule, trie, allows, denies, origins):
-        evidence = {}
+    def _rule_selectors(self, rule, context):
+        if rule.get("policy"):
+            statements = policy_statements(rule["policy"])
+            by_effect = defaultdict(set)
+            for statement in statements:
+                by_effect[statement["Effect"]].update(
+                    _grants("", **statement_scope(statement), context=context)
+                )
+            if any(statement["Effect"] == "Allow" for statement in statements):
+                return by_effect["Allow"], by_effect["Deny"]
+            return by_effect["Deny"], set()
+
         selector = rule["resource_pattern"].removeprefix("arn:aws:s3:::")
-        global_only = rule["require_global_grant"]
-        for resource in ("*",) if global_only else self._selectors(selector):
-            for pattern, actions in trie.matching_grants(resource):
+        resources = ("*",) if rule["require_global_grant"] else self._selectors(selector)
+        return {
+            Grant(action, resource, "", True) for resource in resources for action in rule["risky_actions"]
+        }, set()
+
+    def _identity_evidence(self, rule, trie, allows, denies, origins, context):
+        evidence = {}
+        selectors, template_denies = self._rule_selectors(rule, context)
+        denied = denies | template_denies
+        for selector in selectors:
+            for pattern, actions in trie.matching_grants(selector.resource):
                 for action in actions:
                     for grant in allows[pattern, action]:
-                        for risky in rule["risky_actions"]:
-                            decision = self._match(grant, risky, resource, denies, global_only)
-                            if decision is False:
-                                continue
-                            key = pattern, action, grant.policy, grant.exceptions
-                            conditional = decision is None and evidence.get(key, {}).get("conditional", True)
-                            evidence[key] = {
-                                "policy": grant.policy, "resource": pattern, "action": action,
-                                "direct": origins[grant.policy].get("direct", False),
-                                "groups": origins[grant.policy].get("groups", []),
-                                "conditional": conditional,
-                                **grant.evidence_exceptions(),
-                            }
+                        decision = self._match(
+                            grant, selector.action, selector.resource, denied,
+                            rule["require_global_grant"], template_exceptions=selector.exceptions,
+                        )
+                        if decision is False:
+                            continue
+                        key = pattern, action, grant.policy, grant.exceptions
+                        matched_scope = {}
+                        if rule.get("policy"):
+                            key += (selector.action, selector.resource, selector.exceptions)
+                            matched_scope = {"matched_action": selector.action, "matched_resource": selector.resource}
+                        conditional = (decision is None or selector.decision is None) and evidence.get(
+                            key, {}
+                        ).get("conditional", True)
+                        evidence[key] = {
+                            "policy": grant.policy, "resource": pattern, "action": action,
+                            "direct": origins[grant.policy].get("direct", False),
+                            "groups": origins[grant.policy].get("groups", []),
+                            "conditional": conditional,
+                            **grant.evidence_exceptions(),
+                            **matched_scope,
+                        }
         return [evidence[key] for key in sorted(evidence)]
 
     def _calculate_risk_score(self, username, context):
@@ -355,12 +401,12 @@ class RiskEngine:
         for rule in rules:
             evidence = (
                 self._public_evidence(rule, anonymous) if _public_rule(rule)
-                else self._identity_evidence(rule, *identity)
+                else self._identity_evidence(rule, *identity, context)
             )
             if evidence:
                 violations.append({
                     "rule": rule["description"],
-                    "resource": rule["resource_pattern"],
+                    "resource": rule.get("resource_pattern") or "IAM policy scope",
                     "severity": rule.get("severity", 10),
                     "actual_allowed_actions": sorted({grant["action"] for grant in evidence}),
                     "evidence": evidence,

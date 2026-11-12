@@ -8,10 +8,10 @@ from backend.api.database.connection import get_db
 from backend.api.deps import get_current_user, get_loader, get_requester_role
 from backend.api.dto.group import GroupMembershipRequest
 from backend.api.dto.policyAttachment import PolicyAttachmentRequest
-from backend.api.dto.risk import RiskRulesUpdate
+from backend.api.dto.risk import RiskRule, RiskRulesUpdate
 from backend.api.dto.simulation import SimulationRequest
 from backend.core.dashboard import build_dashboard
-from backend.core.graphLoader.riskEngine import RiskEngine
+from backend.core.graphLoader.riskEngine import RiskEngine, risk_rule_catalog
 
 router = APIRouter()
 REVIEW_ROLES = ("ADMIN", "AUDITOR")
@@ -133,22 +133,58 @@ def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
 @router.get("/config/risks")
 def get_risk_configuration(role=Depends(get_requester_role), loader=Depends(get_loader)):
     _require_role(role, ("ADMIN",))
-    engine = RiskEngine(loader)
-    return {**engine.risk_rules, "label": engine.config_label}
+    rules, revision = loader.get_risk_config_snapshot()
+    engine = RiskEngine(loader, rules=rules)
+    return {**engine.risk_rules, "label": engine.config_label, "revision": revision}
+
+
+@router.get("/config/risk-catalog")
+def get_risk_rule_catalog(role=Depends(get_requester_role)):
+    _require_role(role, ("ADMIN",))
+    return {"rules": risk_rule_catalog()}
+
+
+@router.get("/config/policies")
+def list_risk_policy_sources(role=Depends(get_requester_role), loader=Depends(get_loader)):
+    _require_role(role, ("ADMIN",))
+    return {"policies": loader.list_policy_names()}
+
+
+@router.get("/config/policies/{name}")
+def read_risk_policy_source(name: str, role=Depends(get_requester_role), loader=Depends(get_loader)):
+    _require_role(role, ("ADMIN",))
+    if name not in loader.list_policy_names():
+        raise HTTPException(status_code=404, detail="MinIO policy not found.")
+    return {"policy": loader.get_policy(name)}
+
+
+@router.post("/config/risks/validate")
+def validate_risk_rule(rule: RiskRule, role=Depends(get_requester_role)):
+    _require_role(role, ("ADMIN",))
+    return rule.model_dump(exclude_none=True)
 
 
 @router.post("/config/risks")
 def update_risk_configuration(update: RiskRulesUpdate, role=Depends(get_requester_role),
                               loader=Depends(get_loader)):
     _require_role(role, ("ADMIN",))
-    previous = RiskEngine(loader)
-    new_rules = update.model_dump()
+    previous_rules, revision = loader.get_risk_config_snapshot()
+    conflict = HTTPException(status_code=409, detail="Configuration changed. Reload before saving your changes.")
+    if "base_revision" in update.model_fields_set and update.base_revision != revision:
+        raise conflict
+    previous = RiskEngine(loader, rules=previous_rules)
+    new_rules = update.model_dump(include={"risk_rules"}, exclude_none=True)
     updated = RiskEngine(loader, rules=new_rules)
     created_at = previous.config_created_at if previous.config_version == updated.config_version else None
     updated.config_created_at = created_at or datetime.now(timezone.utc).isoformat()
-    loader.save_risk_config({**new_rules, "created_at": updated.config_created_at})
+    try:
+        revision = loader.save_risk_config({**new_rules, "created_at": updated.config_created_at}, revision)
+    except ClientError as error:
+        if error.response["Error"]["Code"] in ("PreconditionFailed", "ConditionalRequestConflict", "412"):
+            raise conflict from error
+        raise
     return {"message": "Configuration updated successfully", "rules_count": len(update.risk_rules),
-            "label": updated.config_label}
+            "label": updated.config_label, "revision": revision}
 
 
 @router.get("/iam/options")

@@ -14,7 +14,8 @@ import { useAuth } from "../context/auth";
  * Returns a Data URI for use in Vis.js 'image' shape.
  */
 const getSvgIcon = (type) => {
-  const encodeSvg = (svg) => "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  const encodeSvg = (svg) => "data:image/svg+xml;charset=utf-8," +
+    encodeURIComponent(svg.replace("<svg ", '<svg width="96" height="96" '));
 
   // Theme: Solarized/Pastel for Cyber Security Context
   const colors = {
@@ -36,6 +37,7 @@ const getSvgIcon = (type) => {
 
 // --- VIS.JS Graph Configuration ---
 const graphOptions = {
+  autoResize: true,
   layout: {
     hierarchical: false,
   },
@@ -250,7 +252,7 @@ function ScanContent() {
   }, [username, isSelfScanOnly, user]);
 
   return (
-    <div className="row g-3 h-100">
+    <div className="row g-3 align-items-start">
       {/* Left Panel: Scan Controls & Results */}
       <div className="col-lg-4 d-flex flex-column">
         <Card className="border-secondary flex-grow-1 d-flex flex-column">
@@ -282,6 +284,7 @@ function ScanContent() {
               <div className="d-flex gap-2 mb-3">
                 <select
                   className="form-select form-select-lg bg-dark border-secondary text-light"
+                  aria-label="User to scan"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={loading}
@@ -330,10 +333,7 @@ function ScanContent() {
                     </p>
                   )}
                 </div>
-                <div
-                  className="flex-grow-1 overflow-auto"
-                  style={{ minHeight: 120 }}
-                >
+                <div className="scan-findings">
                   <p className="small text-body-secondary mb-2 fw-semibold">
                     Violations (
                     {result.violations_count ?? result.violations?.length ?? 0})
@@ -365,8 +365,8 @@ function ScanContent() {
       </div>
 
       {/* Right Panel - Visualization Graph */}
-      <div className="col-lg-8" style={{ minHeight: 500 }}>
-        <Card className="border-secondary h-100">
+      <div className="col-lg-8">
+        <Card className="border-secondary">
           <CardHeader className="d-flex justify-content-between align-items-center">
             <div>
               <CardTitle className="d-flex align-items-center gap-2">
@@ -383,8 +383,8 @@ function ScanContent() {
                  </Badge>
             )}
           </CardHeader>
-          <CardContent className="p-0 position-relative" style={{ height: "450px", overflow: 'hidden' }}>
-             <div style={{ width: '100%', height: '100%', backgroundColor: '#0d1117' }}>
+          <CardContent className="p-0">
+             <div className="scan-graph">
                 {graphData.nodes.length > 0 ? (
                     <Graph
                         key={graphKey}

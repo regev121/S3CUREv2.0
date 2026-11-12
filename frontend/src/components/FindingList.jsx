@@ -31,6 +31,11 @@ export default function FindingList({ findings, emptyText }) {
                           .filter(Boolean).join(" · ")}
                       </div>
                       <code>{grant.action}</code> on <code>{grant.resource}</code>
+                      {grant.matched_action && (
+                        <div className="text-body-secondary">
+                          Matched <code>{grant.matched_action}</code> on <code>{grant.matched_resource}</code>
+                        </div>
+                      )}
                       {grant.excluded_actions?.length > 0 && (
                         <div>Excluded actions <code>{grant.excluded_actions.join(", ")}</code></div>
                       )}

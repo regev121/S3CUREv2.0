@@ -23,6 +23,86 @@ body {
   flex-shrink: 0;
 }
 
+html:has(.scan-graph) {
+  scrollbar-gutter: stable;
+}
+
+.scan-graph {
+  block-size: clamp(28rem, 68vh, 54rem);
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.scan-findings {
+  max-block-size: min(54vh, 38rem);
+  overflow: auto;
+}
+
+.config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem 2rem;
+  background-color: var(--bs-tertiary-bg);
+}
+
+.config-tabs .nav-link.active {
+  color: var(--bs-primary-text-emphasis) !important;
+  background: var(--bs-primary-bg-subtle);
+}
+
+.config-search {
+  position: relative;
+  flex: 1 1 16rem;
+}
+
+.config-search svg {
+  position: absolute;
+  inset-inline-start: .75rem;
+  inset-block-start: .65rem;
+  color: var(--bs-secondary-color);
+  pointer-events: none;
+}
+
+.config-search input {
+  padding-inline-start: 2.25rem;
+}
+
+.config-rule {
+  padding: .875rem 1rem;
+}
+
+.config-rule + .config-rule {
+  border-top: 1px solid var(--bs-border-color);
+}
+
+.config-rule-title {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.config-rule-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .25rem .75rem;
+}
+
+.config-rule-scope dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.config-json-editor,
+.config-policy-preview {
+  background-color: #0d1117;
+  color: #e6edf3;
+}
+
+.config-policy-preview {
+  max-block-size: 20rem;
+  overflow: auto;
+}
+
 /* Sidebar nav link active state */
 .nav-link.active {
   background-color: rgba(13, 110, 253, 0.2);

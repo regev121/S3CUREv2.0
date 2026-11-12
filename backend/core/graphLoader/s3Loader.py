@@ -24,6 +24,10 @@ class IdentityConflict(MinioError):
     pass
 
 
+RISK_CONFIG_KEY = "config/risks-v2.json"
+LEGACY_RISK_CONFIG_KEY = "config/risks.json"
+
+
 def _names(value):
     if isinstance(value, str):
         value = value.split(",")
@@ -207,12 +211,15 @@ class S3Loader:
             return "AUDITOR"
         return "USER"
 
+    def list_policy_names(self):
+        policies = self._mc(("admin", "policy", "list"), self.admin_alias)
+        return sorted({row["policy"] for row in policies if isinstance(row.get("policy"), str)})
+
     def list_catalog(self):
         # Only admin endpoints call this method. The scanner does not need catalog access.
-        policies = self._mc(("admin", "policy", "list"), self.admin_alias)
         group_rows = self._mc(("admin", "group", "list"), self.admin_alias)
         return {
-            "policies": sorted({row["policy"] for row in policies if isinstance(row.get("policy"), str)}),
+            "policies": self.list_policy_names(),
             "groups": sorted({
                 group for row in group_rows
                 for group in (row.get("groups") or [row.get("groupName") or row.get("group")])
@@ -304,15 +311,25 @@ class S3Loader:
                         yield obj["Key"], report, obj["LastModified"]
 
     def get_risk_config(self):
-        for bucket in dict.fromkeys((self.processed_bucket, self.legacy_bucket)):
+        return self.get_risk_config_snapshot()[0]
+
+    def get_risk_config_snapshot(self):
+        sources = dict.fromkeys((
+            (self.processed_bucket, RISK_CONFIG_KEY),
+            (self.processed_bucket, LEGACY_RISK_CONFIG_KEY),
+            (self.legacy_bucket, LEGACY_RISK_CONFIG_KEY),
+        ))
+        for bucket, key in sources:
             if not bucket:
                 continue
             try:
-                return self._read_json(bucket, "config/risks.json")
+                obj = self.s3.get_object(Bucket=bucket, Key=key)
+                with obj["Body"] as body:
+                    return json.load(body), obj.get("ETag") if key == RISK_CONFIG_KEY else None
             except ClientError as error:
                 if error.response["Error"]["Code"] not in ("NoSuchKey", "404"):
                     raise
-        return None
+        return None, None
 
     def get_bucket_policies(self):
         try:
@@ -332,11 +349,14 @@ class S3Loader:
                 coverage = "partial"
         return policies, coverage
 
-    def save_risk_config(self, rules):
-        self.s3.put_object(
-            Bucket=self.processed_bucket, Key="config/risks.json",
+    def save_risk_config(self, rules, revision=None):
+        condition = {"IfMatch": revision} if revision else {"IfNoneMatch": "*"}
+        result = self.s3.put_object(
+            Bucket=self.processed_bucket, Key=RISK_CONFIG_KEY,
             Body=json.dumps(rules).encode("utf-8"), ContentType="application/json",
+            **condition,
         )
+        return result["ETag"]
 
     def storage_info(self):
         rows = self._mc(("admin", "info"), self.telemetry_alias)
