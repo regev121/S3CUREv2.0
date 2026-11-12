@@ -15,6 +15,9 @@ class DemoLoader(S3Loader):
     def get_risk_config(self):
         return None
 
+    def get_bucket_policies(self):
+        return {}, "complete"
+
     def get_user_assignments(self, username):
         assert username == "demo-analyst"
         return set(), {"prod-editors": self.get_group_policies_names("prod-editors")}
@@ -56,6 +59,7 @@ def run_demo():
             "after": after,
             "delta": round(after - before, 2),
             "findings": findings,
+            "graph": engine._export_graph_to_json(),
             "effective_groups_after_simulation": sorted(loader.get_user_assignments(username)[1]),
             "archived_scans": len(loader.reports),
         },

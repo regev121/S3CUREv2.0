@@ -17,6 +17,8 @@ def scanner_policy(raw_bucket, processed_bucket):
         {"Effect": "Allow", "Action": [
             "admin:GetUser", "admin:ListUsers", "admin:GetGroup", "admin:GetPolicy",
         ], "Resource": ["*"]},
+        {"Effect": "Allow", "Action": ["s3:ListAllMyBuckets", "s3:GetBucketPolicy"],
+         "Resource": ["arn:aws:s3:::*"]},
         {"Effect": "Allow", "Action": ["s3:GetBucketLocation"], "Resource": [raw, processed]},
         {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [processed]},
         {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": [

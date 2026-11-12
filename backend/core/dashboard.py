@@ -1,4 +1,4 @@
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from urllib.request import urlopen
@@ -43,6 +43,51 @@ def _severity(violation):
 
 def _average(rows):
     return round(sum(row["score"] for row in rows) / len(rows), 2) if rows else None
+
+
+def _daily_scores(reports):
+    by_day = defaultdict(dict)
+    for row in reports:
+        day = row["time"].astimezone(timezone.utc).date()
+        by_day[day][row["user"]] = row
+    return {day: _average(rows.values()) for day, rows in by_day.items()}
+
+
+def _history_views(reports, first_day):
+    scores = _daily_scores(reports)
+    general = {
+        "id": "general", "label": "General (last 7 days)",
+        "history": [
+            {"day": day.isoformat(), "score": scores.get(day)}
+            for day in (first_day + timedelta(days=offset) for offset in range(7))
+        ],
+    }
+    versions = defaultdict(list)
+    for row in reports:
+        versions[row["riskConfigVersion"]].append(row)
+
+    views = [general]
+    labels = {}
+    for version, rows in sorted(versions.items(), key=lambda entry: entry[1][-1]["time"], reverse=True):
+        created_at = next((row["configCreatedAt"] for row in rows if row["configCreatedAt"]), None)
+        date = datetime.fromisoformat(created_at) if created_at else rows[0]["time"]
+        label = f"CONFIG_Creation_Date:{date:%d/%m/%Y}" if version else "Legacy scans"
+        labels[version] = label
+        daily = _daily_scores(rows)
+        views.append({
+            "id": version or "legacy", "label": label,
+            "dateEstimated": bool(version and not created_at),
+            "history": [{"day": day.isoformat(), "score": score} for day, score in daily.items()],
+        })
+    duplicates = Counter(view["label"] for view in views)
+    seen = Counter()
+    for view in views[1:]:
+        label = view["label"]
+        if duplicates[label] > 1:
+            seen[label] += 1
+            view["label"] = f"{label} ({seen[label]}/{duplicates[label]})"
+            labels[view["id"]] = view["label"]
+    return views, labels
 
 
 def _availability(loader, db):
@@ -111,6 +156,7 @@ def build_dashboard(loader, db):
                 "user": report["user"],
                 "score": report["risk_score"],
                 "riskConfigVersion": report.get("risk_config_version"),
+                "configCreatedAt": report.get("risk_config_created_at"),
                 "time": scanned_at,
                 "violations": report.get("violated_rules", []),
             })
@@ -130,6 +176,7 @@ def build_dashboard(loader, db):
     most_at_risk = max(comparable, key=lambda row: row["score"], default=None)
 
     first_day = datetime.now(timezone.utc).date() - timedelta(days=6)
+    history_views, config_labels = _history_views(reports, first_day)
     risk_history = []
     known = {}
     index = 0
@@ -156,6 +203,7 @@ def build_dashboard(loader, db):
             ),
         },
         "riskHistory": risk_history,
+        "riskHistoryViews": history_views,
         "violationsBySeverity": [
             {"name": severity, "value": violations[severity], "color": color}
             for severity, color in SEVERITY_COLORS.items()
@@ -163,7 +211,8 @@ def build_dashboard(loader, db):
         "recentActivity": [
             {"id": row["id"], "user": row["user"], "score": row["score"],
              "time": row["time"].isoformat(), "status": _risk_status(row["score"]),
-             "riskConfigVersion": row["riskConfigVersion"]}
+             "riskConfigVersion": row["riskConfigVersion"],
+             "riskConfigLabel": config_labels[row["riskConfigVersion"]]}
             for row in reversed(reports[-10:])
         ],
         "telemetry": {**telemetry, "archiveAvailable": archive_available},

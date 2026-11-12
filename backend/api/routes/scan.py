@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -42,6 +44,8 @@ def scan_user(username, requester=Depends(get_current_user), role=Depends(get_re
         "user": username,
         "score": score,
         "risk_config_version": engine.config_version,
+        "risk_config_label": engine.config_label,
+        "bucket_policy_coverage": engine.bucket_policy_snapshot[1],
         "violations_count": len(violations),
         "violations": [v["rule"] for v in violations],
         "violation_details": violations,
@@ -106,11 +110,14 @@ def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
     current, simulated, violations = engine.compare_simulation(
         request.username, request.add_policies, request.remove_policies,
         request.add_groups, request.remove_groups,
+        context=request.context.policy_values() if request.context else None,
     )
     delta = round(simulated - current, 2)
     return {
         "user": request.username,
         "risk_config_version": engine.config_version,
+        "risk_config_label": engine.config_label,
+        "bucket_policy_coverage": engine.bucket_policy_snapshot[1],
         "comparison": {
             "current_score": current,
             "simulated_score": simulated,
@@ -126,15 +133,22 @@ def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
 @router.get("/config/risks")
 def get_risk_configuration(role=Depends(get_requester_role), loader=Depends(get_loader)):
     _require_role(role, ("ADMIN",))
-    return RiskEngine(loader).risk_rules
+    engine = RiskEngine(loader)
+    return {**engine.risk_rules, "label": engine.config_label}
 
 
 @router.post("/config/risks")
 def update_risk_configuration(update: RiskRulesUpdate, role=Depends(get_requester_role),
                               loader=Depends(get_loader)):
     _require_role(role, ("ADMIN",))
-    loader.save_risk_config(update.model_dump())
-    return {"message": "Configuration updated successfully", "rules_count": len(update.risk_rules)}
+    previous = RiskEngine(loader)
+    new_rules = update.model_dump()
+    updated = RiskEngine(loader, rules=new_rules)
+    created_at = previous.config_created_at if previous.config_version == updated.config_version else None
+    updated.config_created_at = created_at or datetime.now(timezone.utc).isoformat()
+    loader.save_risk_config({**new_rules, "created_at": updated.config_created_at})
+    return {"message": "Configuration updated successfully", "rules_count": len(update.risk_rules),
+            "label": updated.config_label}
 
 
 @router.get("/iam/options")

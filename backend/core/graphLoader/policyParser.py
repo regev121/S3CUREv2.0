@@ -1,6 +1,10 @@
 from backend.core.graphLoader.graph import SecurityGraph, NodeType
 
 
+def as_list(value):
+    return [value] if isinstance(value, str) else (value or [])
+
+
 class PolicyParser:
     def __init__(self, graph: SecurityGraph):
         """
@@ -33,16 +37,17 @@ class PolicyParser:
     def _process_statement(self, policy_id, statement):
         """
         Analyzes a single IAM Statement block to determine access effects.
-        Filters for 'Allow' effects to map positive access paths.
-        The graph records grant paths for rule-based risk scoring.
+        Records both positive access paths and explicit denials.
         """
         effect = statement.get("Effect", "Deny")
 
-        if effect != "Allow":
+        if effect not in ("Allow", "Deny"):
             return
 
-        actions = self._ensure_list(statement.get("Action", []))
-        resources = self._ensure_list(statement.get("Resource", []))
+        not_actions = as_list(statement.get("NotAction"))
+        not_resources = as_list(statement.get("NotResource"))
+        actions = as_list(statement.get("Action")) or (["*"] if not_actions else [])
+        resources = as_list(statement.get("Resource")) or (["*"] if not_resources else [])
         conditions = statement.get("Condition", {})
 
         for resource_arn in resources:
@@ -57,18 +62,12 @@ class PolicyParser:
             self.graph.add_edge(
                 source=policy_id,
                 target=resource_id,
-                relationship_type="ALLOWS",
-                metadata={"actions": actions, "conditions": conditions},
+                relationship_type="ALLOWS" if effect == "Allow" else "DENIES",
+                metadata={
+                    "actions": actions, "conditions": conditions, "not_actions": not_actions,
+                    "not_resources": [self._normalize_resource_name(arn) for arn in not_resources],
+                },
             )
-
-    def _ensure_list(self, value):
-        """
-        Utility to normalize scalar strings into single-item lists.
-        Ensures consistent iteration over Actions and Resources.
-        """
-        if isinstance(value, str):
-            return [value]
-        return value if value else []
 
     def _normalize_resource_name(self, arn):
         """

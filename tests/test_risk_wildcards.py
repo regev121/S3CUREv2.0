@@ -53,12 +53,12 @@ def test_default_risk_rules_match_scoped_grants_and_keep_administrator_breadth()
     assert violations[0]["actual_allowed_actions"] == ["s3:Put*Policy"]
 
     score, violations = evaluate(engine, "s3:GetObject", "*")
-    assert score == 16.36
-    assert len(violations) == 1
-    assert evaluate(engine, "s3:GetObject", "prod-bucket/private/*")[0] == 16.36
-    assert evaluate(engine, "s3:*", "prod-bucket")[0] == 58.18
-    assert evaluate(engine, "s3:*", "*")[0] == 90.91
-    assert evaluate(engine, "*", "*")[0] == 100
+    assert score == 0
+    assert violations == []
+    assert evaluate(engine, "s3:GetObject", "prod-bucket/private/*")[0] == 0
+    assert evaluate(engine, "s3:*", "prod-bucket")[0] == 41.82
+    assert evaluate(engine, "s3:*", "*")[0] == 74.55
+    assert evaluate(engine, "*", "*")[0] == 83.64
 
 
 def test_rule_mode_is_configurable_and_legacy_administrator_rule_keeps_its_scope():

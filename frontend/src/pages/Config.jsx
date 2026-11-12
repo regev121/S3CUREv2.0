@@ -29,6 +29,7 @@ import {
 export default function Config() {
   const { user } = useAuth();
   const [rules, setRules] = useState([]);
+  const [configLabel, setConfigLabel] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [initLoading, setInitLoading] = useState(false);
@@ -57,6 +58,7 @@ export default function Config() {
     setLoading(true);
     try {
       const { data } = await api.get("/api/scan/config/risks");
+      setConfigLabel(data.label ?? "");
       // Backward compatibility: Handle both wrapper object and direct array responses
       if (data.risk_rules) {
         setRules(data.risk_rules);
@@ -162,7 +164,8 @@ export default function Config() {
   const handleSaveChanges = async () => {
     setSaving(true);
     try {
-      await api.post("/api/scan/config/risks", { risk_rules: rules });
+      const { data } = await api.post("/api/scan/config/risks", { risk_rules: rules });
+      setConfigLabel(data.label ?? "");
       alert("Configuration saved successfully!");
     } catch (err) {
       console.error(err);
@@ -184,7 +187,7 @@ export default function Config() {
         <div>
           <h1 className="h2 fw-bold text-light mb-1">Risk Configuration</h1>
           <p className="text-body-secondary mb-0">
-            Manage detection rules and risk scoring logic.
+            {configLabel || "Manage detection rules and risk scoring logic."}
           </p>
         </div>
         <div className="d-flex gap-2">

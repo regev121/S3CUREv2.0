@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 
 class MinioError(RuntimeError):
@@ -313,6 +313,24 @@ class S3Loader:
                 if error.response["Error"]["Code"] not in ("NoSuchKey", "404"):
                     raise
         return None
+
+    def get_bucket_policies(self):
+        try:
+            buckets = self.s3.list_buckets()["Buckets"]
+        except (ClientError, BotoCoreError):
+            return {}, "unavailable"
+        policies = {}
+        coverage = "complete"
+        for bucket in buckets:
+            name = bucket["Name"]
+            try:
+                policies[name] = json.loads(self.s3.get_bucket_policy(Bucket=name)["Policy"])
+            except ClientError as error:
+                if error.response["Error"]["Code"] not in ("NoSuchBucketPolicy", "NoSuchBucket"):
+                    coverage = "partial"
+            except (BotoCoreError, ValueError):
+                coverage = "partial"
+        return policies, coverage
 
     def save_risk_config(self, rules):
         self.s3.put_object(

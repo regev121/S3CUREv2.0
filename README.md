@@ -85,17 +85,19 @@ The scanner flattens direct and inherited policies into a `User → Policy → R
 
 `RAW_SCAN_BUCKET` stores the JSON report and `PROCCESSED_SCAN_BUCKET` stores the matching JS graph. Each scan has a timestamped UTC prefix, so repeated scans retain their history while keeping filenames such as `Alice_Scan_Raw.json` and `Alice_Scan_Processed.js`. Dashboard and history include completed pairs. If an older `reports/` archive exists, set `LEGACY_SCAN_BUCKET` and grant scanner read access to that prefix separately.
 
-Each new scan stores a SHA-256 fingerprint of the effective rules and scoring model. The dashboard shows a seven-day trend for the latest scanned configuration, along with severity and highest risk for comparable users. Recent activity displays each report's configuration. Earlier reports without a fingerprint appear as legacy results. The dashboard also shows the last scan and live service telemetry. `MINIO_TELEMETRY_ALIAS` can be set to a read-only MinIO alias with `admin:ServerInfo` for disk capacity and uptime. By default it uses the configured admin alias.
+Each new scan stores a SHA-256 fingerprint of the effective rules and scoring model. The dashboard defaults to a seven-day trend across configurations and averages the last scan for each user on each day with scans. The dropdown also shows the history for individual configurations and for legacy scans. Configuration labels use `CONFIG_Creation_Date:dd/mm/yyyy`. When creation metadata is missing, the dashboard labels the date as the first archived scan for that version. Current risk and severity metrics compare users under the latest scanned configuration. The dashboard also shows the last scan and live service telemetry. `MINIO_TELEMETRY_ALIAS` can be set to a read-only MinIO alias with `admin:ServerInfo` for disk capacity and uptime. By default it uses the configured admin alias.
 
 ## How the risk engine works
 
 1. Resolve the user's direct policies and each group's policies. Take their set union and fetch each policy document once.
 2. Build a directed graph with three layers. Traverse from the user through each policy to its resources, at a fixed depth of two.
 3. Index each resource grant in a permission trie by the literal characters before its first wildcard. A search checks compatible prefixes and evaluates whether the grant and rule patterns can match a common string. The glob syntax supports '*' for zero or more characters and '?' for one character. A bare bucket selector in a risk rule covers that bucket and its objects. An exact bucket grant keeps its own scope.
-4. For each risk rule, find overlapping resource and action patterns. A rule with **Require a deployment-wide grant** enabled checks grants on all resources. For that mode, '*' and service-wide action selectors such as 's3:*' require full coverage. The saved default administrator rules use this mode. Each matching rule contributes its severity once. The score is 100 times the sum of matching severities divided by the total severity. The eight default rules sum to 55. Production read and delete alone produce 34.55.
-5. For a simulation, resolve the existing and proposed assignments separately, then evaluate both using the same fetched policy documents. A grant shared by two groups survives the removal of either group by itself.
+4. Apply explicit Deny to the overlapping action and resource scope, including `NotAction` and `NotResource` exceptions. A deployment-wide rule requires coverage of the full action and resource scope. For other rules, access outside a denied scope can still trigger a finding.
+5. Evaluate supported IAM conditions against the request context. The Simulator accepts a source IP, HTTP or HTTPS, and an S3 listing prefix. The engine supports IP ranges, booleans and common string comparisons. Missing context and unsupported conditions are marked as unresolved. Findings retain the policy and resource pattern, plus direct or group provenance.
+6. For R001, inspect the MinIO bucket policy for anonymous read or listing access within the bucket's scope. The scanner reads bucket names and policies using `s3:ListAllMyBuckets` and `s3:GetBucketPolicy`. Run `python -m backend.provision_minio` to update those scanner permissions on an existing deployment.
+7. For a simulation, resolve the existing and proposed assignments separately, then evaluate both using the same identity and bucket policy snapshots. A grant shared by two groups survives the removal of either group by itself.
 
-The score measures potential exposure relative to the configured rules. The policy graph contains Allow statements and stores Condition as edge metadata. Effective authorization also depends on Deny statements and request context. Graph edges are stored in a list, so collecting edges for P policies costs O((P + 1)E) for E edges, plus trie construction and rule evaluation.
+The score measures potential exposure relative to the configured rules, including findings with unresolved conditions. Each matching rule contributes its severity once. The score is 100 times the sum of matching severities divided by the total severity. The eight default rules sum to 55. Graph edges are stored in a list, so collecting edges for P policies costs O((P + 1)E) for E edges, plus trie construction and rule evaluation.
 
 ## Recovery provenance
 
@@ -109,7 +111,7 @@ Run from the repository root with the Python dependencies installed.
 python -m backend.demo_risk
 ```
 
-The synthetic analyst starts in prod-editors and can read and delete production objects. The simulated move to prod-readers keeps read access and drops the delete grant. The score changes from 34.55 to 16.36 under the same default configuration. The JSON output includes the policy and group evidence, the ruleset fingerprint, and the simulated delta. The demo runs entirely in memory with synthetic IAM data.
+The synthetic analyst starts in prod-editors and can read and delete objects in a private production bucket. The simulated move to prod-readers keeps read access and drops the delete grant, changing the score from 18.18 to 0. The JSON output includes the policy graphs, the ruleset fingerprint, and the simulated delta. The demo runs entirely in memory with synthetic IAM data.
 
 ## Verification
 

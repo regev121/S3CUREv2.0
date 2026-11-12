@@ -59,6 +59,9 @@ export default function Simulation() {
   const [users, setUsers] = useState([]);
   const [options, setOptions] = useState(null);
   const [changes, setChanges] = useState({});
+  const [sourceIp, setSourceIp] = useState("");
+  const [transport, setTransport] = useState("");
+  const [prefix, setPrefix] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -93,11 +96,20 @@ export default function Simulation() {
     setResult(null);
     setError("");
     try {
-      const { data } = await api.post("/api/scan/simulate", { username, ...changes });
+      const context = {
+        source_ip: sourceIp.trim() || null,
+        secure_transport: transport === "" ? null : transport === "https",
+        s3_prefix: prefix || null,
+      };
+      const { data } = await api.post("/api/scan/simulate", { username, ...changes, context });
       setResult(data);
     } catch (error) {
-      setError(typeof error.response?.data?.detail === "string"
-        ? error.response.data.detail : "Unable to run this simulation.");
+      const detail = error.response?.data?.detail;
+      if (Array.isArray(detail) && detail.some((issue) => issue.loc?.includes("source_ip"))) {
+        setError("Enter a valid IPv4 or IPv6 address.");
+      } else {
+        setError(typeof detail === "string" ? detail : "Unable to run this simulation.");
+      }
     } finally {
       setLoading(false);
     }
@@ -146,6 +158,22 @@ export default function Simulation() {
                       ...prev, [field]: prev[field].filter((entry) => entry !== item),
                     }))} />
                 ))}
+              </fieldset>
+              <fieldset className="border-top border-secondary pt-3 mt-3" disabled={loading || !options}>
+                <legend className="fs-6 text-light">Request context</legend>
+                <label className="form-label text-body-secondary small" htmlFor="source-ip">Source IP</label>
+                <input id="source-ip" className="form-control bg-dark text-light border-secondary mb-2"
+                  value={sourceIp} onChange={(event) => setSourceIp(event.target.value)} />
+                <label className="form-label text-body-secondary small" htmlFor="transport">Transport</label>
+                <select id="transport" className="form-select bg-dark text-light border-secondary mb-2"
+                  value={transport} onChange={(event) => setTransport(event.target.value)}>
+                  <option value="">Unspecified</option>
+                  <option value="https">HTTPS</option>
+                  <option value="http">HTTP</option>
+                </select>
+                <label className="form-label text-body-secondary small" htmlFor="s3-prefix">Bucket listing prefix</label>
+                <input id="s3-prefix" className="form-control bg-dark text-light border-secondary"
+                  value={prefix} onChange={(event) => setPrefix(event.target.value)} />
               </fieldset>
               {error && <div role="alert" className="alert alert-danger py-2">{error}</div>}
               <div className="mt-4">
@@ -227,13 +255,16 @@ export default function Simulation() {
                     <AlertTriangle size={18} className="text-warning"/>
                     Simulated Violations
                   </CardTitle>
-                  {result.risk_config_version && (
+                  {result.risk_config_label && (
                     <p className="small text-body-secondary mb-0" title={result.risk_config_version}>
-                      Both scores use configuration {result.risk_config_version.slice(0, 8)}
+                      {result.risk_config_label}
                     </p>
                   )}
                 </CardHeader>
                 <CardContent>
+                  {result.bucket_policy_coverage && result.bucket_policy_coverage !== "complete" && (
+                    <p className="small text-warning mb-2">Anonymous access review is incomplete.</p>
+                  )}
                   <FindingList
                     findings={result.violation_details ?? result.simulated_violations}
                     emptyText="No violations found in this simulation."

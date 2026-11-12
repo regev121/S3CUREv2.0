@@ -89,7 +89,8 @@ export default function Dashboard() {
     criticalViolations: 0,
     systemHealth: "Unknown",
   });
-  const [riskHistory, setRiskHistory] = useState([]);
+  const [historyViews, setHistoryViews] = useState([]);
+  const [historyViewId, setHistoryViewId] = useState("general");
   const [violationsBySeverity, setViolationsBySeverity] = useState([]);
   const [recentActivity, setRecentActivity] = useState([]);
   const [telemetry, setTelemetry] = useState(null);
@@ -106,7 +107,9 @@ export default function Dashboard() {
       const { data } = await api.get("/api/scan/dashboard/stats");
       if (data) {
          setStats(data.stats || {});
-         setRiskHistory(data.riskHistory || []);
+         setHistoryViews(data.riskHistoryViews || [
+           { id: "general", label: "General (last 7 days)", history: data.riskHistory || [] },
+         ]);
          setViolationsBySeverity(data.violationsBySeverity || []);
          setRecentActivity(data.recentActivity || []);
          setTelemetry(data.telemetry);
@@ -158,8 +161,7 @@ export default function Dashboard() {
       return {};
   };
 
-  const configLabel = stats.riskConfigVersion?.slice(0, 8)
-    ?? (stats.totalUsersScanned ? "Unrecorded (legacy)" : "Awaiting scans");
+  const historyView = historyViews.find((view) => view.id === historyViewId) ?? historyViews[0];
   const hasViolations = violationsBySeverity.some((entry) => entry.value > 0);
   const distribution = hasViolations
     ? violationsBySeverity.filter((entry) => entry.value > 0)
@@ -238,16 +240,25 @@ export default function Dashboard() {
         <div className="col-lg-8">
           <Card className="border-secondary h-100">
             <CardHeader>
-              <CardTitle>Risk Score History (Last 7 Days)</CardTitle>
-              <p className="small text-body-secondary mb-0" title={stats.riskConfigVersion ?? undefined}>
-                Latest scanned configuration · {configLabel}
-              </p>
+              <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <CardTitle>Risk Score History</CardTitle>
+                <select className="form-select form-select-sm bg-dark text-light border-secondary w-auto"
+                  aria-label="Risk history view" value={historyView?.id ?? ""}
+                  onChange={(event) => setHistoryViewId(event.target.value)}>
+                  {historyViews.map((view) => (
+                    <option key={view.id} value={view.id}>{view.label}</option>
+                  ))}
+                </select>
+              </div>
+              {historyView?.dateEstimated && (
+                <p className="small text-body-secondary mb-0">Date of the first archived scan with this configuration</p>
+              )}
             </CardHeader>
             <CardContent>
               <div style={{ height: 280 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
-                    data={riskHistory}
+                    data={historyView?.history ?? []}
                     margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
                   >
                     <CartesianGrid
@@ -274,9 +285,11 @@ export default function Dashboard() {
                       itemStyle={{ color: "#dee2e6" }}
                     />
                     <Line
-                      type="monotone"
+                      type="linear"
+                      connectNulls
                       isAnimationActive={false}
                       dataKey="score"
+                      name="Average risk score"
                       stroke={CHART_COLORS.line}
                       strokeWidth={2}
                       dot={{ fill: CHART_COLORS.line, r: 4 }}
@@ -387,7 +400,7 @@ export default function Dashboard() {
                         </td>
                         <td className="text-body-secondary small">{formatDate(row.time)}</td>
                         <td className="text-body-secondary small" title={row.riskConfigVersion ?? undefined}>
-                          {row.riskConfigVersion?.slice(0, 8) ?? "Legacy"}
+                          {row.riskConfigLabel ?? "Legacy scans"}
                         </td>
                         <td className="pe-4">
                         <Badge

@@ -31,6 +31,9 @@ class ObjectStore:
         assert operation == "list_objects_v2"
         return self
 
+    def list_buckets(self):
+        return {"Buckets": []}
+
     def paginate(self, Bucket, Prefix):
         yield {"Contents": [
             {"Key": key, "LastModified": row[2]}
@@ -70,7 +73,7 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
     }
     groups = {"Ops": "prod-read", "QA": "prod-read", "Owners": "consoleAdmin"}
     policy = {"Statement": [{
-        "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::prod-bucket",
+        "Effect": "Allow", "Action": "s3:DeleteBucket", "Resource": "arn:aws:s3:::prod-bucket",
     }]}
 
     def fake_mc(command, alias, *args, options=()):
@@ -159,12 +162,13 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             assert data["violation_details"][0]["evidence"] == [{
                 "policy": "prod-read",
                 "resource": "prod-bucket",
-                "action": "s3:GetObject",
+                "action": "s3:DeleteBucket",
                 "direct": True,
                 "groups": ["Ops", "QA"],
                 "conditional": False,
             }]
             assert data["score"] > 0
+            assert data["bucket_policy_coverage"] == "complete"
             assert {node["type"] for node in data["graph_data"]["nodes"]} == {"USER", "POLICY", "RESOURCE"}
             assert len(data["graph_data"]["edges"]) == 2
             assert len(loader.s3.objects) == 2
@@ -183,6 +187,7 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             assert options["member_groups"] == ["Ops", "QA"]
             partial = client.post("/api/scan/simulate", headers=admin, json={
                 "username": "Alice", "remove_policies": ["prod-read"], "remove_groups": ["Ops"],
+                "context": {"source_ip": "192.0.2.11", "secure_transport": False},
             }).json()
             assert partial["comparison"]["delta"] == 0
             assert partial["risk_config_version"] == data["risk_config_version"]

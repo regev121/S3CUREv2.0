@@ -69,7 +69,7 @@ export function MainLayout() {
         className="flex-shrink-0 border-end border-secondary bg-dark position-fixed start-0 top-0 bottom-0 z-2 overflow-auto"
         style={{ width: "14rem" }}
       >
-        <div className="d-flex align-items-center gap-2 border-bottom border-secondary px-3 py-3">
+        <div className="app-header-row d-flex align-items-center gap-2 border-bottom border-secondary px-3">
           <Shield
             className="text-primary"
             style={{ width: "1.75rem", height: "1.75rem" }}
@@ -102,7 +102,7 @@ export function MainLayout() {
         className="flex-grow-1 d-flex flex-column"
         style={{ marginLeft: "14rem" }}
       >
-        <header className="sticky-top z-1 d-flex align-items-center justify-content-between border-bottom border-secondary bg-dark px-4 py-3">
+        <header className="app-header-row sticky-top z-1 d-flex align-items-center justify-content-between border-bottom border-secondary bg-dark px-4">
           <Breadcrumbs />
           <div className="d-flex align-items-center gap-3">
             <span className="d-flex align-items-center gap-2 small text-body-secondary">
