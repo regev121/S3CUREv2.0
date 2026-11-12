@@ -227,6 +227,11 @@ export default function Simulation() {
                     <AlertTriangle size={18} className="text-warning"/>
                     Simulated Violations
                   </CardTitle>
+                  {result.risk_config_version && (
+                    <p className="small text-body-secondary mb-0" title={result.risk_config_version}>
+                      Both scores use configuration {result.risk_config_version.slice(0, 8)}
+                    </p>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <FindingList

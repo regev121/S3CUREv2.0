@@ -1,11 +1,14 @@
 import json
 from collections import defaultdict
+from hashlib import sha256
 from pathlib import Path
 from backend.core.graphLoader.s3Loader import S3Loader, policy_origins
 from backend.core.graphLoader.graph import SecurityGraph, NodeType
 from backend.core.graphLoader.policyParser import PolicyParser
 from backend.core.graphLoader.trie import PermissionTrie, patterns_overlap
 
+
+SCORING_MODEL = "allow-overlap-v1"
 
 def _requires_global_grant(rule):
     configured = rule.get("require_global_grant")
@@ -49,6 +52,19 @@ class RiskEngine:
             ],
         }
 
+        effective_rules = [
+            json.dumps({
+                "description": rule["description"],
+                "severity": rule.get("severity", 10),
+                "resource": rule["resource_pattern"].removeprefix("arn:aws:s3:::"),
+                "actions": sorted(set(rule["risky_actions"])),
+                "require_global_grant": rule["require_global_grant"],
+            }, sort_keys=True, separators=(",", ":"))
+            for rule in self.risk_rules["risk_rules"]
+        ]
+        fingerprint = json.dumps([SCORING_MODEL, sorted(effective_rules)], separators=(",", ":"))
+        self.config_version = sha256(fingerprint.encode("utf-8")).hexdigest()
+
     def _evaluate(self, username, policies, origins=None):
         self.graph.clear()
         self.graph.add_node(f"user:{username}", NodeType.USER)
@@ -69,6 +85,7 @@ class RiskEngine:
         self.loader.archive_scan_result(username, {
             "user": username,
             "risk_score": risk_score,
+            "risk_config_version": self.config_version,
             "violated_rules": violations,
             "policies_analyzed": sorted(policies),
         }, graph)

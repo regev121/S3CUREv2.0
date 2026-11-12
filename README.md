@@ -85,7 +85,7 @@ The scanner flattens direct and inherited policies into a `User → Policy → R
 
 `RAW_SCAN_BUCKET` stores the JSON report and `PROCCESSED_SCAN_BUCKET` stores the matching JS graph. Each scan has a timestamped UTC prefix, so repeated scans retain their history while keeping filenames such as `Alice_Scan_Raw.json` and `Alice_Scan_Processed.js`. Dashboard and history include completed pairs. If an older `reports/` archive exists, set `LEGACY_SCAN_BUCKET` and grant scanner read access to that prefix separately.
 
-The dashboard shows the latest score per user, a seven-day trend, violation severity, last scan, highest risk, and live service telemetry. `MINIO_TELEMETRY_ALIAS` can be set to a read-only MinIO alias with `admin:ServerInfo` for disk capacity and uptime. By default it uses the configured admin alias.
+Each new scan stores a SHA-256 fingerprint of the effective rules and scoring model. The dashboard shows a seven-day trend for the latest scanned configuration, along with severity and highest risk for comparable users. Recent activity displays each report's configuration. Earlier reports without a fingerprint appear as legacy results. The dashboard also shows the last scan and live service telemetry. `MINIO_TELEMETRY_ALIAS` can be set to a read-only MinIO alias with `admin:ServerInfo` for disk capacity and uptime. By default it uses the configured admin alias.
 
 ## How the risk engine works
 

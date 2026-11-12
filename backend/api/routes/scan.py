@@ -35,11 +35,13 @@ def get_all_users(role=Depends(get_requester_role), loader=Depends(get_loader)):
 def scan_user(username, requester=Depends(get_current_user), role=Depends(get_requester_role),
               loader=Depends(get_loader)):
     _require_target(loader, requester, role, username)
-    score, violations, graph = RiskEngine(loader).analyze_user_return_data(username)
+    engine = RiskEngine(loader)
+    score, violations, graph = engine.analyze_user_return_data(username)
     return {
         "message": "Scan complete",
         "user": username,
         "score": score,
+        "risk_config_version": engine.config_version,
         "violations_count": len(violations),
         "violations": [v["rule"] for v in violations],
         "violation_details": violations,
@@ -52,7 +54,8 @@ def get_user_history(username, requester=Depends(get_current_user), role=Depends
                      loader=Depends(get_loader)):
     _require_target(loader, requester, role, username)
     reports = [
-        {"filename": key, "last_modified": modified.isoformat(), "score": report["risk_score"]}
+        {"filename": key, "last_modified": modified.isoformat(), "score": report["risk_score"],
+         "risk_config_version": report.get("risk_config_version")}
         for key, report, modified in loader.iter_reports(username)
     ]
     reports.sort(key=lambda report: report["last_modified"], reverse=True)
@@ -99,13 +102,15 @@ def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
     _require_role(role, ("ADMIN",))
     if loader.is_scanner_name(request.username):
         raise HTTPException(status_code=403, detail="The scanner is a service account.")
-    current, simulated, violations = RiskEngine(loader).compare_simulation(
+    engine = RiskEngine(loader)
+    current, simulated, violations = engine.compare_simulation(
         request.username, request.add_policies, request.remove_policies,
         request.add_groups, request.remove_groups,
     )
     delta = round(simulated - current, 2)
     return {
         "user": request.username,
+        "risk_config_version": engine.config_version,
         "comparison": {
             "current_score": current,
             "simulated_score": simulated,

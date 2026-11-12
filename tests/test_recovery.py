@@ -173,6 +173,7 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             assert raw.endswith("/Alice_Scan_Raw.json")
             assert js == raw.removesuffix("_Raw.json") + "_Processed.js"
             report = json.loads(loader.s3.objects[raw_bucket, raw][0])
+            assert report["risk_config_version"] == data["risk_config_version"]
             exported_js = loader.s3.objects[processed_bucket, js][0].decode()
             assert report["graph_data"] == data["graph_data"]
             assert json.loads(exported_js.removeprefix("const graphData = ").removesuffix(";\n")) == data["graph_data"]
@@ -184,6 +185,7 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
                 "username": "Alice", "remove_policies": ["prod-read"], "remove_groups": ["Ops"],
             }).json()
             assert partial["comparison"]["delta"] == 0
+            assert partial["risk_config_version"] == data["risk_config_version"]
             simulated_grant = partial["violation_details"][0]["evidence"][0]
             assert not simulated_grant["direct"]
             assert simulated_grant["groups"] == ["QA"]

@@ -77,3 +77,15 @@ def test_rule_mode_is_configurable_and_legacy_administrator_rule_keeps_its_scope
     }).model_dump()
     custom = RiskEngine(RulesLoader(saved))
     assert evaluate(custom, "s3:GetObject", "prod-bucket/*")[0] == 100
+
+
+def test_configuration_fingerprint_is_stable_for_equivalent_orderings():
+    rules = RiskEngine(RulesLoader()).risk_rules["risk_rules"]
+    original = RiskEngine(RulesLoader({"risk_rules": rules})).config_version
+    reordered = [
+        {**rule, "risky_actions": list(reversed(rule["risky_actions"]))}
+        for rule in reversed(rules)
+    ]
+    assert RiskEngine(RulesLoader({"risk_rules": reordered})).config_version == original
+    changed = [{**rules[0], "severity": rules[0]["severity"] + 1}, *rules[1:]]
+    assert RiskEngine(RulesLoader({"risk_rules": changed})).config_version != original

@@ -158,6 +158,8 @@ export default function Dashboard() {
       return {};
   };
 
+  const configLabel = stats.riskConfigVersion?.slice(0, 8)
+    ?? (stats.totalUsersScanned ? "Unrecorded (legacy)" : "Awaiting scans");
   const hasViolations = violationsBySeverity.some((entry) => entry.value > 0);
   const distribution = hasViolations
     ? violationsBySeverity.filter((entry) => entry.value > 0)
@@ -210,7 +212,7 @@ export default function Dashboard() {
             icon={Activity}
             label="Avg Risk Score"
             value={stats.avgRiskScore ?? "—"}
-            sub="0–100 scale"
+            sub={stats.comparableUsers == null ? "0–100 scale" : stats.comparableUsers + " comparable users"}
             variant="warning"
           />
         </div>
@@ -237,6 +239,9 @@ export default function Dashboard() {
           <Card className="border-secondary h-100">
             <CardHeader>
               <CardTitle>Risk Score History (Last 7 Days)</CardTitle>
+              <p className="small text-body-secondary mb-0" title={stats.riskConfigVersion ?? undefined}>
+                Latest scanned configuration · {configLabel}
+              </p>
             </CardHeader>
             <CardContent>
               <div style={{ height: 280 }}>
@@ -369,7 +374,7 @@ export default function Dashboard() {
               <tbody>
                 {recentActivity.length === 0 ? (
                     <tr className="border-secondary">
-                        <td colSpan="4" className="text-center text-body-secondary py-4">No recent activity found.</td>
+                        <td colSpan="5" className="text-center text-body-secondary py-4">No recent activity found.</td>
                     </tr>
                 ) : (
                     recentActivity.map((row) => (
@@ -381,6 +386,9 @@ export default function Dashboard() {
                         <span className="text-light">{row.score}</span>
                         </td>
                         <td className="text-body-secondary small">{formatDate(row.time)}</td>
+                        <td className="text-body-secondary small" title={row.riskConfigVersion ?? undefined}>
+                          {row.riskConfigVersion?.slice(0, 8) ?? "Legacy"}
+                        </td>
                         <td className="pe-4">
                         <Badge
                             variant={getBadgeVariant(row.status)}

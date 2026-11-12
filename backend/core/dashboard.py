@@ -110,6 +110,7 @@ def build_dashboard(loader, db):
                 "id": key,
                 "user": report["user"],
                 "score": report["risk_score"],
+                "riskConfigVersion": report.get("risk_config_version"),
                 "time": scanned_at,
                 "violations": report.get("violated_rules", []),
             })
@@ -117,14 +118,16 @@ def build_dashboard(loader, db):
         archive_available = False
 
     reports.sort(key=lambda row: row["time"])
+    selected_version = reports[-1]["riskConfigVersion"] if reports else None
     latest = {row["user"]: row for row in reports}
-    current_score = _average(list(latest.values()))
+    comparable = [row for row in latest.values() if row["riskConfigVersion"] == selected_version]
+    current_score = _average(comparable)
     violations = Counter(
         _severity(violation)
-        for row in latest.values() for violation in row["violations"]
+        for row in comparable for violation in row["violations"]
         if isinstance(violation, dict)
     )
-    most_at_risk = max(latest.values(), key=lambda row: row["score"], default=None)
+    most_at_risk = max(comparable, key=lambda row: row["score"], default=None)
 
     first_day = datetime.now(timezone.utc).date() - timedelta(days=6)
     risk_history = []
@@ -136,12 +139,15 @@ def build_dashboard(loader, db):
             row = reports[index]
             known[row["user"]] = row
             index += 1
-        risk_history.append({"day": day.isoformat(), "score": _average(list(known.values()))})
+        daily_rows = [row for row in known.values() if row["riskConfigVersion"] == selected_version]
+        risk_history.append({"day": day.isoformat(), "score": _average(daily_rows)})
 
     return {
         "stats": {
             "totalUsersScanned": len(latest),
             "avgRiskScore": current_score,
+            "riskConfigVersion": selected_version,
+            "comparableUsers": len(comparable),
             "criticalViolations": violations["Critical"],
             "systemHealth": _risk_status(current_score),
             "lastScan": reports[-1]["time"].isoformat() if reports else None,
@@ -156,7 +162,8 @@ def build_dashboard(loader, db):
         ],
         "recentActivity": [
             {"id": row["id"], "user": row["user"], "score": row["score"],
-             "time": row["time"].isoformat(), "status": _risk_status(row["score"])}
+             "time": row["time"].isoformat(), "status": _risk_status(row["score"]),
+             "riskConfigVersion": row["riskConfigVersion"]}
             for row in reversed(reports[-10:])
         ],
         "telemetry": {**telemetry, "archiveAvailable": archive_available},

@@ -324,6 +324,11 @@ function ScanContent() {
               <>
                 <div className="text-center mb-4">
                   <RiskGauge score={result.score} />
+                  {result.risk_config_version && (
+                    <p className="small text-body-secondary mt-2 mb-0" title={result.risk_config_version}>
+                      Configuration · {result.risk_config_version.slice(0, 8)}
+                    </p>
+                  )}
                 </div>
                 <div
                   className="flex-grow-1 overflow-auto"
