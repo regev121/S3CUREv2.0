@@ -9,12 +9,25 @@ Use Python 3.11 or newer, Node.js 22, the MinIO server and `mc`, and a PostgreSQ
 ```powershell
 python -m pip install -r requirements.txt
 if (-not (Test-Path -LiteralPath '.env')) { Copy-Item .env.example .env }
-python -c "import secrets; from cryptography.fernet import Fernet; print(secrets.token_urlsafe(48)); print(Fernet.generate_key().decode())"
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-For a new .env file, put the first generated value in `SECRET_KEY` and the second in `ENCRYPTION_KEY`. Set the scanner password before provisioning. Keep the keys stable across restarts. If you are reconnecting an existing database, use its original encryption key to retain access to encrypted account records.
+Set `ENCRYPTION_KEY` in `.env`. If you are reconnecting an existing database, use its original encryption key to retain access to encrypted account records. Set separate MinIO secrets for the scanner and IAM manager. Generate each new secret independently and store it in a protected local configuration file or a secrets manager.
 
-For an existing S3CURE database, set DATABASE_URL in .env and start the API with the uvicorn command below. The API uses the existing schema. To enter the login interactively, the following optional command checks connectivity and table names in a read-only transaction before saving DATABASE_URL.
+For PostgreSQL, create a dedicated login for the API. Run these commands in `psql` with the database operator account. The second command prompts for a password.
+
+```sql
+CREATE ROLE s3cure_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+\password s3cure_runtime
+```
+
+Load the operator's connection URL into `DATABASE_SETUP_URL` for the setup process. The grant command adds missing tables and grants the runtime login the permissions used by the API. Use the operator URL again for schema updates, assigning roles, and archive backfills.
+
+```powershell
+python setupDb.py --grant-runtime s3cure_runtime
+```
+
+Set `DATABASE_URL` in `.env` to the runtime URL. The following optional command checks connectivity and table names in a read-only transaction before saving that URL. The runtime login has read access to application role assignments, and role changes require the operator login.
 
 ```powershell
 python setupDb.py --configure-postgres
@@ -26,6 +39,8 @@ For a fresh local MinIO deployment, run this in a separate PowerShell window. Us
 $dataDir = Join-Path $env:LOCALAPPDATA 'S3CURE\minio-data'
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 $licenseFile = Read-Host 'Full path to the MinIO license file'
+$env:MINIO_ROOT_USER = Read-Host 'MinIO root access key'
+$env:MINIO_ROOT_PASSWORD_FILE = Read-Host 'Path to a protected file containing the MinIO root password'
 minio.exe server --address '127.0.0.1:9000' --console-address '127.0.0.1:9001' --license "$licenseFile" "$dataDir"
 ```
 
@@ -37,13 +52,13 @@ In another terminal, check the instance before provisioning.
 curl.exe -i http://127.0.0.1:9000/minio/health/cluster
 ```
 
-Configure `MINIO_ADMIN_ALIAS` with `mc alias set` for that same deployment. Then prepare the buckets and the scanner account.
+Configure the MinIO operator alias for that deployment in a separate `mc` configuration directory. Set `MINIO_OPERATOR_CONFIG_DIR` for the setup command and `MINIO_ROOT_ACCESS_KEY` in `.env` to reserve the root name in the application.
 
 ```powershell
 python -m backend.provision_minio
 ```
 
-The provisioner uses the admin alias to create the buckets and attach `s3cure-scanner`. The scanner policy allows IAM reads and object writes within the scan buckets. If you reuse an existing `scanner` identity, verify its existing policy and group assignments and use its current secret in `.env`.
+The provisioner creates the buckets and attaches `s3cure-scanner` and `s3cure-iam-manager` to their service identities. The scanner policy allows IAM reads and object writes within the scan buckets. If you reuse an existing scanner, verify its policy and group assignments and use its current secret in `.env`. The manager's policy grants the IAM operations needed for provisioning and assignments, plus read-only telemetry. Treat the manager secret as privileged because those assignments control MinIO access. Give the API process access to the service credentials and keep the operator credentials outside its configuration directory. Newly provisioned MinIO secrets pass to `mc` through standard input.
 
 The recovery inventory in minio-restore.json documents the sample buckets and IAM policy definitions. Configure assignments for the identities in your MinIO deployment.
 
@@ -52,7 +67,7 @@ Use a named MinIO account to enroll the first application administrator. Applica
 ```powershell
 python setupDb.py --app-user YourMinioUsername --role ADMIN
 python setupDb.py --index-scans
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
 For an existing database, assign application roles to the accounts that should retain access, then index the archive. The setup commands add any missing tables and reuse existing accounts. Set a role to `USER` to remove the elevated app assignment.
@@ -67,15 +82,21 @@ In a second PowerShell terminal, start the frontend.
 
 ```powershell
 Set-Location frontend
-npm ci --legacy-peer-deps
-npm run dev
+npm ci
+npm run dev -- --host 127.0.0.1
 ```
 
-Open the Vite address printed in the terminal. Set `VITE_API_BASE_URL` when the API uses a different address.
+Open the Vite address printed in the terminal. Set `VITE_API_BASE_URL` when the API uses a different address. For production, serve the built frontend and `/api` behind the same HTTPS origin and set `S3CURE_ORIGINS` and `S3CURE_SECURE_COOKIES=true`. If you need trusted proxy headers for client IP rate limits, restrict them to the actual reverse proxy.
+
+## Authentication and limits
+
+Sign in with JSON at `POST /api/auth/login`. The server stores a digest of the session identifier in PostgreSQL and gives the browser an HttpOnly, SameSite cookie valid for 30 minutes. The cookie uses Secure for HTTPS. The profile returned by login and `GET /api/auth/me` includes the CSRF token. Send it in `X-CSRF-Token` for authenticated writes. `POST /api/auth/logout` immediately revokes the current session. After upgrading from the bearer-token release, sign in again.
+
+Login allows 40 attempts per client IP and eight per account in five-minute windows. Single-user scans allow eight requests per signed-in requester per minute, with one concurrent request for each requester and four concurrent requests across the API. Each limit uses PostgreSQL across API workers and returns HTTP 429 with `Retry-After` when reached. SQLite supports single-process demos.
 
 ## Sync app users to MinIO
 
-In IAM Manager, a signed-in administrator can create a S3CURE account and a MinIO identity with the same username. New accounts start with the application role `USER`. Run the sync command for accounts already in PostgreSQL. It reads the database and creates only missing MinIO identities. It preserves existing IAM passwords, policies and group memberships. The scanner uses its MinIO credentials directly. The app reserves the scanner name regardless of case and excludes historical scanner rows from login and account sync. Other names that differ only by case require review.
+In IAM Manager, a signed-in administrator can create a S3CURE account and a MinIO identity with the same username. New accounts start with the application role `USER`. Run the sync command for accounts already in PostgreSQL. It reads the database and creates only missing MinIO identities. It preserves existing IAM passwords, policies and group memberships. The app reserves the scanner, manager and root names regardless of case and excludes them from login and account sync. Other names that differ only by case require review.
 
 ```powershell
 python -m backend.sync_minio_users
@@ -94,7 +115,7 @@ The scanner flattens direct and inherited policies into a `User → Policy → R
 
 After indexing, the Dashboard and scan history read compact records from PostgreSQL. Run `python setupDb.py --index-scans` again after importing an external archive or to reconcile reports left by an interrupted write. User history accepts `limit` and `offset` and returns the total count. Bulk scans return HTTP 202 and a job ID. The Dashboard and Config poll the job endpoint for progress. Run one bulk scan at a time. A job with no recorded progress for 30 minutes is marked interrupted and can be started again.
 
-Each new scan stores a SHA-256 fingerprint of the effective rules and scoring model. The dashboard defaults to a seven-day trend across configurations and averages the last scan for each user on each day with scans. The dropdown also shows the history for individual configurations and for legacy scans. Configuration labels use `CONFIG_Creation_Date:dd/mm/yyyy`. When creation metadata is missing, the dashboard labels the date as the first archived scan for that version. Current risk and severity metrics compare users under the latest scanned configuration. The dashboard also shows the last scan and live service telemetry. `MINIO_TELEMETRY_ALIAS` can be set to a read-only MinIO alias with `admin:ServerInfo` for disk capacity and uptime. By default it uses the configured admin alias.
+Each new scan stores a SHA-256 fingerprint of the effective rules and scoring model. The dashboard defaults to a seven-day trend across configurations and averages the last scan for each user on each day with scans. The dropdown also shows the history for individual configurations and for legacy scans. Configuration labels use `CONFIG_Creation_Date:dd/mm/yyyy`. When creation metadata is missing, the dashboard labels the date as the first archived scan for that version. Current risk and severity metrics compare users under the latest scanned configuration. The dashboard also shows the last scan and live service telemetry. Telemetry uses the IAM manager by default. Set `MINIO_TELEMETRY_ALIAS` to use a dedicated read-only alias with `admin:ServerInfo` and `admin:StorageInfo`.
 
 ## How the risk engine works
 
@@ -131,14 +152,16 @@ The synthetic analyst starts in prod-editors and can read and delete objects in 
 ## Verification
 
 ```powershell
-python -m pip install pytest httpx
+python -m pip install pytest httpx2 pip-audit
 python -m pytest tests -q
+python -m pip_audit -r requirements.txt
 Set-Location frontend
+npm audit
 npm run lint
 npm run build
 ```
 
-The API suite uses temporary SQLite and an in-memory MinIO stand-in. To also test against MinIO, configure a local endpoint and matching admin alias in `.env`, then run the opt-in test. It creates and removes its own buckets, policies, and users, and exercises Allow, Deny, and the scanner's archive permissions.
+The API suite uses temporary SQLite and an in-memory MinIO stand-in. To also test against MinIO, configure a local endpoint and matching operator alias, then run the opt-in test. It creates and removes its own buckets, policies and users. It exercises Allow, Deny, the scanner's archive permissions and provisioning through the IAM manager.
 
 ```powershell
 $env:S3CURE_RUN_MINIO_TESTS = '1'

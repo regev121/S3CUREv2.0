@@ -89,13 +89,12 @@ export default function Config() {
   const [message, setMessage] = useState(null);
 
   const load = useCallback(async (signal) => {
-    setLoading(true);
-    setMessage(null);
     try {
       const [{ data: config }, { data: templates }] = await Promise.all([
         api.get("/api/scan/config/risks", { signal }),
         api.get("/api/scan/config/risk-catalog", { signal }),
       ]);
+      if (signal?.aborted) return;
       setRules(config.risk_rules);
       setSavedRules(config.risk_rules);
       setRevision(config.revision ?? null);
@@ -114,7 +113,9 @@ export default function Config() {
 
   useEffect(() => {
     const request = new AbortController();
-    load(request.signal);
+    queueMicrotask(() => {
+      if (!request.signal.aborted) load(request.signal);
+    });
     return () => request.abort();
   }, [load]);
 
@@ -190,7 +191,11 @@ export default function Config() {
         <div className="d-flex flex-wrap align-items-center gap-2">
           {dirty && <span className="small text-warning me-1">Unsaved changes</span>}
           {(dirty || loadFailed) && (
-            <Button variant="secondary" onClick={() => load()} disabled={saving || loading}>
+            <Button variant="secondary" onClick={() => {
+              setLoading(true);
+              setMessage(null);
+              load();
+            }} disabled={saving || loading}>
               {dirty ? "Discard draft" : "Retry"}
             </Button>
           )}

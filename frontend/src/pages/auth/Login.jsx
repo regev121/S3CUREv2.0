@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Shield } from "lucide-react";
-import api from "../../services/api";
 import { useAuth } from "../../context/auth";
 import {
   Card,
@@ -25,25 +24,12 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      params.append("username", username);
-      params.append("password", password);
-
-      const { data } = await api.post("/api/auth/login", params.toString(), {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      });
-
-      const token = data.access_token;
-      if (token) {
-        const profile = await login(token);
-        navigate(profile.role === "USER" ? "/scan" : "/dashboard", { replace: true });
-      }
+      const profile = await login({ username, password });
+      navigate(profile.role === "USER" ? "/scan" : "/dashboard", { replace: true });
     } catch (err) {
       const msg =
         err.response?.data?.detail ?? "Login failed. Check credentials.";
-      setError(Array.isArray(msg) ? msg.join(", ") : msg);
+      setError(Array.isArray(msg) ? msg.map((issue) => issue.msg).join(", ") : msg);
     } finally {
       setLoading(false);
     }

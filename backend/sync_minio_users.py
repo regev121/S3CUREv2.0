@@ -14,7 +14,7 @@ def main():
     with SessionLocal() as db:
         names = list(db.scalars(select(User.username).order_by(User.username)))
     loader = S3Loader()
-    app_names = [name for name in names if not loader.is_scanner_name(name)]
+    app_names = [name for name in names if not loader.is_service_identity(name)]
     name_counts = Counter(name.casefold() for name in app_names)
     skipped = len(names) - len(app_names)
     created = []

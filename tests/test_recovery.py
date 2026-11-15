@@ -56,7 +56,6 @@ class ObjectStore:
 
 def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'app.db').as_posix()}")
-    monkeypatch.setenv("SECRET_KEY", "unit-test-placeholder-key-for-authentication")
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("MINIO_SCANNER_ACCESS_KEY", "scanner")
     monkeypatch.setenv("RAW_SCAN_BUCKET", "test-raw")
@@ -66,7 +65,8 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
     from backend.api.database import connection
     from backend.api.database.models import AppRole, User
     from backend.api.deps import get_loader
-    from backend.core.authentication.security import create_access_token, get_password_hash
+    from backend.core.authentication.security import get_password_hash
+    from backend.core.authentication.sessions import COOKIE
     from backend.core import bulk_scans, dashboard
     from backend.core.scan_index import backfill_scan_index
     from backend.main import app
@@ -94,7 +94,7 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
         "Effect": "Allow", "Action": "s3:DeleteBucket", "Resource": "arn:aws:s3:::prod-bucket",
     }]}
 
-    def fake_mc(command, alias, *args, options=()):
+    def fake_mc(command, alias, *args, options=(), stdin=None):
         calls.append((command, alias))
         if command == ("admin", "user", "list"):
             return [{"accessKey": name} for name in users]
@@ -111,15 +111,15 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
         if command == ("admin", "group", "list"):
             return [{"groups": list(groups)}]
         if command == ("admin", "user", "add"):
-            username, password = args
-            assert alias == loader.admin_alias and password.startswith("s3c-")
+            username, = args
+            assert alias == loader.manager_alias and stdin.startswith("s3c-")
             if username == "FailedSignup":
                 raise MinioError("IAM service unavailable")
             assert username not in users
             users[username] = {"memberOf": []}
             return [{"status": "success"}]
         if command == ("admin", "policy", "attach"):
-            assert alias == loader.admin_alias and args == ("prod-read",) and options == ("--user=Empty",)
+            assert alias == loader.manager_alias and args == ("prod-read",) and options == ("--user=Empty",)
             return [{"status": "success"}]
         if command == ("admin", "info"):
             return [{"info": {"servers": [{
@@ -140,11 +140,16 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
         db.commit()
 
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="https://testserver") as client:
             def login(name):
-                response = client.post("/api/auth/login", data={"username": name, "password": login_password})
+                response = client.post("/api/auth/login", json={"username": name, "password": login_password})
                 assert response.status_code == 200, response.text
-                return {"Authorization": f"Bearer {response.json()['access_token']}"}
+                cookie = response.cookies[COOKIE]
+                assert {"httponly", "secure", "samesite=strict"} <= set(
+                    response.headers["set-cookie"].lower().split("; ")
+                )
+                client.cookies.clear()
+                return {"Cookie": f"{COOKIE}={cookie}", "X-CSRF-Token": response.json()["csrf_token"]}
 
             alice = login("Alice")
             auditor = login("Auditor")
@@ -162,10 +167,23 @@ def test_scans_simulation_roles_and_telemetry(monkeypatch, tmp_path):
             users["Alice"] = original_alice
             for name in ("scanner", "Scanner"):
                 credentials = {"username": name, "password": login_password}
-                assert client.post("/api/auth/login", data=credentials).status_code == 401
-                stale_token = create_access_token({"sub": name})
-                assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {stale_token}"}).status_code == 401
+                assert client.post("/api/auth/login", json=credentials).status_code == 401
             assert client.get("/api/scan/users").status_code == 401
+            assert client.post("/api/scan/user/Alice", headers={"Cookie": alice["Cookie"]}).status_code == 403
+            assert client.post("/api/scan/user/Alice", headers={
+                **alice, "Origin": "https://example.invalid",
+            }).status_code == 403
+            disposable = login("Empty")
+            assert client.post("/api/auth/logout", headers=disposable).status_code == 204
+            assert client.get("/api/auth/me", headers=disposable).status_code == 401
+            # Use a small limit to cover the 429 contract without an expensive login loop.
+            from backend.core.request_limits import consume_limit
+            from fastapi import HTTPException
+            with SessionLocal() as db:
+                consume_limit(db, "test", "rate-limited", limit=1, seconds=300)
+                with pytest.raises(HTTPException) as rejected:
+                    consume_limit(db, "test", "rate-limited", limit=1, seconds=300)
+                assert rejected.value.status_code == 429 and int(rejected.value.headers["Retry-After"]) > 0
             assert client.get("/api/scan/users", headers=alice).status_code == 403
             assert client.post("/api/scan/user/Empty", headers=alice).status_code == 403
             assert client.get("/api/scan/history/Empty", headers=alice).status_code == 403

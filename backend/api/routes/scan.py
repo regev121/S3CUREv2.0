@@ -15,6 +15,7 @@ from backend.core.dashboard import build_dashboard
 from backend.core.bulk_scans import get_job, job_data, queue_scan, run_bulk_scan
 from backend.core.graphLoader.riskEngine import RiskEngine, risk_rule_catalog
 from backend.core.scan_index import record_scan, scan_history
+from backend.core.request_limits import consume_limit, reserve_scan
 
 router = APIRouter()
 REVIEW_ROLES = ("ADMIN", "AUDITOR")
@@ -26,7 +27,7 @@ def _require_role(role, allowed):
 
 
 def _require_target(loader, requester, role, target):
-    if loader.is_scanner_name(target) or (role == "USER" and requester.username != target):
+    if loader.is_service_identity(target) or (role == "USER" and requester.username != target):
         raise HTTPException(status_code=403, detail="You cannot access scans for this identity.")
 
 
@@ -40,8 +41,10 @@ def get_all_users(role=Depends(get_requester_role), loader=Depends(get_loader)):
 def scan_user(username, requester=Depends(get_current_user), role=Depends(get_requester_role),
               loader=Depends(get_loader), db: Session = Depends(get_db)):
     _require_target(loader, requester, role, username)
-    engine = RiskEngine(loader)
-    score, violations, graph = engine.analyze_user_return_data(username, on_archived=partial(record_scan, db))
+    consume_limit(db, "scan-user", requester.id, limit=8, seconds=60)
+    with reserve_scan(db, requester.id):
+        engine = RiskEngine(loader)
+        score, violations, graph = engine.analyze_user_return_data(username, on_archived=partial(record_scan, db))
     return {
         "message": "Scan complete",
         "user": username,
@@ -98,8 +101,8 @@ def bulk_scan_status(job_id: str, role=Depends(get_requester_role), db: Session 
 @router.get("/simulate/options/{username}")
 def simulation_options(username, role=Depends(get_requester_role), loader=Depends(get_loader)):
     _require_role(role, ("ADMIN",))
-    if loader.is_scanner_name(username):
-        raise HTTPException(status_code=403, detail="The scanner is a service account.")
+    if loader.is_service_identity(username):
+        raise HTTPException(status_code=403, detail="This is a service account.")
     return loader.list_simulation_options(username)
 
 
@@ -107,8 +110,8 @@ def simulation_options(username, role=Depends(get_requester_role), loader=Depend
 def run_simulation(request: SimulationRequest, role=Depends(get_requester_role),
                    loader=Depends(get_loader)):
     _require_role(role, ("ADMIN",))
-    if loader.is_scanner_name(request.username):
-        raise HTTPException(status_code=403, detail="The scanner is a service account.")
+    if loader.is_service_identity(request.username):
+        raise HTTPException(status_code=403, detail="This is a service account.")
     engine = RiskEngine(loader)
     current, simulated, violations = engine.compare_simulation(
         request.username, request.add_policies, request.remove_policies,

@@ -53,9 +53,13 @@ export function MainLayout() {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
 
-  const handleLogout = () => {
-    logout();
-    navigate("/login");
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate("/login");
+    } catch {
+      window.alert("Could not sign out. Try again.");
+    }
   };
 
   const role = user?.role || "USER";

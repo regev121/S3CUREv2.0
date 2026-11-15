@@ -15,12 +15,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.graphLoader.s3Loader import S3Loader
-from backend.provision_minio import scanner_policy
+from backend.provision_minio import manager_policy, scanner_policy
 
 
 @pytest.mark.skipif(os.getenv("S3CURE_RUN_MINIO_TESTS") != "1", reason="Requires an opted-in local MinIO deployment")
 def test_real_minio_policy_scan_and_archive(monkeypatch, tmp_path):
     load_dotenv()
+    if os.getenv("MINIO_OPERATOR_CONFIG_DIR"):
+        monkeypatch.setenv("MC_CONFIG_DIR", os.environ["MINIO_OPERATOR_CONFIG_DIR"])
     loader = S3Loader()
     endpoint = urlsplit(loader.endpoint)
     assert endpoint.hostname in {"127.0.0.1", "::1", "localhost"}
@@ -32,10 +34,17 @@ def test_real_minio_policy_scan_and_archive(monkeypatch, tmp_path):
     raw, processed, data = (name + suffix for suffix in ("-raw", "-processed", "-data"))
     scanner = name + "-scanner"
     secret = secrets.token_urlsafe(32)
+    manager = name + "-manager"
+    manager_secret = secrets.token_urlsafe(32)
+    iam_policy = name + "-iam"
     allow, deny, scan_policy = (name + suffix for suffix in ("-allow", "-deny", "-scan-policy"))
 
     def mc(command, *args):
         return loader._mc(command, loader.admin_alias, *args)
+
+    def attach(username, policy_name):
+        loader._mc(("admin", "policy", "attach"), loader.admin_alias, policy_name,
+                   options=(f"--user={username}",))
 
     def bucket_command(command, bucket):
         assert bucket in (raw, processed, data)
@@ -58,24 +67,31 @@ def test_real_minio_policy_scan_and_archive(monkeypatch, tmp_path):
             create_policy(cleanup, policy_name, {"Version": "2012-10-17", "Statement": [{
                 "Effect": effect, "Action": ["s3:DeleteBucket"], "Resource": [f"arn:aws:s3:::{data}"],
             }]})
-        for username, password in ((scanner, secret), (name, secrets.token_urlsafe(32))):
-            loader.create_identity(username, password)
+        create_policy(cleanup, iam_policy, manager_policy())
+        for username, password in ((scanner, secret), (manager, manager_secret)):
+            loader.create_identity(username, password, operator=True)
             cleanup.callback(mc, ("admin", "user", "remove"), username)
-        for username, policy_name in ((scanner, scan_policy), (name, allow)):
-            loader.change_policy("attach", username, policy_name)
+        attach(scanner, scan_policy)
+        attach(manager, iam_policy)
+        monkeypatch.setenv("MINIO_MANAGER_ACCESS_KEY", manager)
+        monkeypatch.setenv("MINIO_MANAGER_SECRET_KEY", manager_secret)
         monkeypatch.setenv("MINIO_SCANNER_ACCESS_KEY", scanner)
         monkeypatch.setenv("MINIO_SCANNER_SECRET_KEY", secret)
         monkeypatch.setenv("RAW_SCAN_BUCKET", raw)
         monkeypatch.setenv("PROCCESSED_SCAN_BUCKET", processed)
         monkeypatch.delenv("LEGACY_SCAN_BUCKET", raising=False)
         scanner_loader = S3Loader()
+        scanner_loader.create_identity(name, secrets.token_urlsafe(32))
+        cleanup.callback(mc, ("admin", "user", "remove"), name)
+        scanner_loader.change_policy("attach", name, allow)
+        assert allow in scanner_loader.list_catalog()["policies"]
+        assert scanner_loader.storage_info()["servers"]
         scanner_loader.save_risk_config({"risk_rules": [{
             "description": "Delete an isolated test bucket", "severity": 10,
             "resource_pattern": data, "risky_actions": ["s3:DeleteBucket"],
         }]})
         db_url = f"sqlite:///{(tmp_path / 'live-api.db').as_posix()}"
         monkeypatch.setenv("DATABASE_URL", db_url)
-        monkeypatch.setenv("SECRET_KEY", secrets.token_urlsafe(48))
         monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
         from backend.api.database import connection
         from backend.api.database.models import User
@@ -96,14 +112,14 @@ def test_real_minio_policy_scan_and_archive(monkeypatch, tmp_path):
             db.add(User(username=name, hashed_password=get_password_hash(password)))
             db.commit()
             assert backfill_scan_index(scanner_loader, db) == 0
-        with TestClient(app) as client:
-            login = client.post("/api/auth/login", data={"username": name, "password": password})
+        with TestClient(app, base_url="https://testserver") as client:
+            login = client.post("/api/auth/login", json={"username": name, "password": password})
             assert login.status_code == 200
-            headers = {"Authorization": "Bearer " + login.json()["access_token"]}
+            headers = {"X-CSRF-Token": login.json()["csrf_token"]}
             path = "/api/scan/user/" + name
             first = client.post(path, headers=headers)
             assert first.status_code == 200 and first.json()["score"] == 100
-            loader.change_policy("attach", name, deny)
+            scanner_loader.change_policy("attach", name, deny)
             second = client.post(path, headers=headers)
             assert second.status_code == 200 and second.json()["score"] == 0
             history = client.get("/api/scan/history/" + name, headers=headers)

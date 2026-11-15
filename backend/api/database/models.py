@@ -24,6 +24,23 @@ class AppRole(Base):
     role = Column(String(7), nullable=False)
 
 
+class AppSession(Base):
+    __tablename__ = "app_sessions"
+
+    digest = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    csrf_token = Column(String(48), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class RequestLimit(Base):
+    __tablename__ = "request_limits"
+
+    key = Column(String(64), primary_key=True)
+    window = Column(Integer, primary_key=True, index=True)
+    count = Column(Integer, nullable=False)
+
+
 class ScanRecord(Base):
     __tablename__ = "scan_records"
     __table_args__ = (Index("scan_records_user_time", "username", "modified_at"),)

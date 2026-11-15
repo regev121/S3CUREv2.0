@@ -61,7 +61,11 @@ class S3Loader:
         self.scanner_access_key = os.getenv("MINIO_SCANNER_ACCESS_KEY", "scanner")
         self.scanner_secret_key = os.getenv("MINIO_SCANNER_SECRET_KEY")
         self.admin_alias = os.getenv("MINIO_ADMIN_ALIAS", "myminio")
-        self.telemetry_alias = os.getenv("MINIO_TELEMETRY_ALIAS", self.admin_alias)
+        self.manager_alias = "s3curemanager"
+        self.manager_access_key = os.getenv("MINIO_MANAGER_ACCESS_KEY")
+        self.manager_secret_key = os.getenv("MINIO_MANAGER_SECRET_KEY")
+        self.telemetry_alias = os.getenv("MINIO_TELEMETRY_ALIAS", self.manager_alias)
+        self.root_access_key = os.getenv("MINIO_ROOT_ACCESS_KEY", "minioadmin")
         self.raw_bucket = os.getenv("RAW_SCAN_BUCKET", "raw-scan")
         self.processed_bucket = os.getenv("PROCCESSED_SCAN_BUCKET", "processed-scan")
         self.legacy_bucket = os.getenv("LEGACY_SCAN_BUCKET")
@@ -69,8 +73,8 @@ class S3Loader:
         self.mc_command = os.getenv("MINIO_MC_COMMAND", "mc")
         if self.raw_bucket == self.processed_bucket:
             raise MinioError("Raw and processed scan buckets must be distinct.")
-        if self.scanner_alias in (self.admin_alias, self.telemetry_alias):
-            raise MinioError("The scanner alias is reserved for the scanner account.")
+        if self.admin_alias in (self.scanner_alias, self.manager_alias):
+            raise MinioError("The scanner and manager aliases are reserved.")
 
     @cached_property
     def s3(self):
@@ -93,15 +97,23 @@ class S3Loader:
         if not self.scanner_secret_key:
             raise MinioError("MINIO_SCANNER_SECRET_KEY is required.")
 
-    def _mc(self, command, alias, *args, options=()):
+    def _mc(self, command, alias, *args, options=(), stdin=None):
         env = os.environ.copy()
-        if alias == self.scanner_alias:
-            self._require_scanner()
-            endpoint = urlsplit(self.endpoint)
-            credentials = (
-                f"{quote(self.scanner_access_key, safe='')}:"
-                f"{quote(self.scanner_secret_key, safe='')}"
+        for setting in (
+            "DATABASE_URL", "DATABASE_SETUP_URL", "ENCRYPTION_KEY", "SECRET_KEY",
+            "MINIO_SCANNER_SECRET_KEY", "MINIO_MANAGER_SECRET_KEY",
+            "MINIO_ROOT_PASSWORD", "MINIO_ROOT_PASSWORD_FILE", "MINIO_OPERATOR_CONFIG_DIR",
+        ):
+            env.pop(setting, None)
+        if alias in (self.scanner_alias, self.manager_alias):
+            access_key, secret_key = (
+                (self.scanner_access_key, self.scanner_secret_key) if alias == self.scanner_alias
+                else (self.manager_access_key, self.manager_secret_key)
             )
+            if not access_key or not secret_key:
+                raise MinioError("MinIO service credentials are required.")
+            endpoint = urlsplit(self.endpoint)
+            credentials = f"{quote(access_key, safe='')}:{quote(secret_key, safe='')}"
             env[f"MC_HOST_{alias}"] = urlunsplit(
                 (endpoint.scheme, f"{credentials}@{endpoint.netloc}", "", "", "")
             )
@@ -111,6 +123,7 @@ class S3Loader:
             result = subprocess.run(
                 [self.mc_command, "--json", "--no-color", *command, *options, alias, *args],
                 capture_output=True,
+                input=stdin,
                 encoding="utf-8",
                 env=env,
                 timeout=12,
@@ -190,20 +203,24 @@ class S3Loader:
     def is_scanner_name(self, username):
         return username.casefold() in ("scanner", self.scanner_access_key.casefold())
 
+    def is_service_identity(self, username):
+        reserved = {value.casefold() for value in (self.manager_access_key, self.root_access_key, "minioadmin") if value}
+        return self.is_scanner_name(username) or username.casefold() in reserved
+
     def get_all_users(self):
         rows = self._read(("admin", "user", "list"))
         return sorted(
             row["accessKey"] for row in rows
-            if row.get("accessKey") and not self.is_scanner_name(row["accessKey"])
+            if row.get("accessKey") and not self.is_service_identity(row["accessKey"])
         )
 
     def list_policy_names(self):
-        policies = self._mc(("admin", "policy", "list"), self.admin_alias)
+        policies = self._mc(("admin", "policy", "list"), self.manager_alias)
         return sorted({row["policy"] for row in policies if isinstance(row.get("policy"), str)})
 
     def list_catalog(self):
         # Only admin endpoints call this method. The scanner does not need catalog access.
-        group_rows = self._mc(("admin", "group", "list"), self.admin_alias)
+        group_rows = self._mc(("admin", "group", "list"), self.manager_alias)
         return {
             "policies": self.list_policy_names(),
             "groups": sorted({
@@ -222,24 +239,27 @@ class S3Loader:
         }
 
     def change_policy(self, action, username, policy):
-        if self.is_scanner_name(username):
-            raise MinioError("The scanner account is managed during provisioning.")
+        if self.is_service_identity(username) or policy in {"s3cure-scanner", "s3cure-iam-manager"}:
+            raise IdentityConflict("Service identities and their policies are managed by the operator.")
         # --user= prevents a username from being interpreted as another CLI option.
         if policy.startswith("-") or username.startswith("-"):
             raise MinioError("Invalid MinIO name.")
-        self._mc(("admin", "policy", action), self.admin_alias, policy, options=(f"--user={username}",))
+        self._mc(("admin", "policy", action), self.manager_alias, policy, options=(f"--user={username}",))
 
     def change_group(self, action, username, group):
-        if self.is_scanner_name(username):
-            raise MinioError("The scanner account is managed during provisioning.")
-        self._mc(("admin", "group", action), self.admin_alias, group, username)
+        if self.is_service_identity(username):
+            raise IdentityConflict("Service identities are managed by the operator.")
+        self._mc(("admin", "group", action), self.manager_alias, group, username)
 
-    def create_identity(self, username, secret):
-        self._mc(("admin", "user", "add"), self.admin_alias, username, secret)
+    def create_identity(self, username, secret, *, operator=False):
+        if any(character in secret for character in "\r\n\0"):
+            raise IdentityConflict("MinIO secrets must be a single line.")
+        alias = self.admin_alias if operator else self.manager_alias
+        self._mc(("admin", "user", "add"), alias, username, stdin=secret + "\n")
 
     def provision_app_identity(self, username, *, link_existing=False):
-        if self.is_scanner_name(username):
-            raise IdentityConflict("This name conflicts with the MinIO scanner account.")
+        if self.is_service_identity(username):
+            raise IdentityConflict("This name is reserved for a service identity.")
         matching = [name for name in self.get_all_users() if name.casefold() == username.casefold()]
         if matching:
             if link_existing and matching == [username]:

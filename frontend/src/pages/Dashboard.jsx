@@ -14,7 +14,7 @@ import {
 import { Users, AlertTriangle, Activity, Heart, RefreshCw, Clock, ShieldAlert, HardDrive, Wifi } from "lucide-react";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import api from "../services/api";
 import { useBulkScan } from "../services/bulkScan";
 
@@ -103,10 +103,10 @@ export default function Dashboard() {
    * Retrieves dashboard analytics from the backend.
    * Optimizes performance by aggregating data on the server-side.
    */
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async (signal) => {
     try {
-      const { data } = await api.get("/api/scan/dashboard/stats");
-      if (data) {
+      const { data } = await api.get("/api/scan/dashboard/stats", { signal });
+      if (data && !signal?.aborted) {
          setStats(data.stats || {});
          setHistoryViews(data.riskHistoryViews || [
            { id: "general", label: "General (last 7 days)", history: data.riskHistory || [] },
@@ -117,15 +117,19 @@ export default function Dashboard() {
          setError("");
       }
     } catch (error) {
-      setError(error.response?.data?.detail || "Unable to load dashboard data.");
+      if (!signal?.aborted) setError(error.response?.data?.detail || "Unable to load dashboard data.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    const request = new AbortController();
+    queueMicrotask(() => {
+      if (!request.signal.aborted) fetchDashboardData(request.signal);
+    });
+    return () => request.abort();
+  }, [fetchDashboardData]);
 
   /**
    * Initiates a comprehensive security scan for all registered users.

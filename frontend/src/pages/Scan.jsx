@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
-import Graph from "react-graph-vis";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { Network as VisNetwork } from "vis-network/standalone";
 import api from "../services/api";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
 import { Button } from "../components/Button";
@@ -386,7 +386,7 @@ function ScanContent() {
           <CardContent className="p-0">
              <div className="scan-graph">
                 {graphData.nodes.length > 0 ? (
-                    <Graph
+                      <RiskGraph
                         key={graphKey}
                         graph={graphData}
                         options={graphOptions}
@@ -402,6 +402,17 @@ function ScanContent() {
       </div>
     </div>
   );
+}
+
+function RiskGraph({ graph, options }) {
+  const container = useRef(null);
+
+  useEffect(() => {
+    const network = new VisNetwork(container.current, graph, options);
+    return () => network.destroy();
+  }, [graph, options]);
+
+  return <div ref={container} className="w-100 h-100" />;
 }
 
 export default function Scan() {
